@@ -1,148 +1,165 @@
-# Handover — BrowserOS fork: pivot + fleet telemetry (Track B)
+# Handover — BrowserOS fork: fleet telemetry (Track B)
 
-_Last updated: 2026-06-21_
+_Last updated: 2026-06-22_
 
 ## TL;DR — where we are
 
 - The fork is consolidated on the **monorepo** and the dev loop runs.
 - **Track B (fleet telemetry)** is the active workstream. Fase 0 + Fase 1 **done**.
-  **Fase 2 M1 + M2 DONE** (code-complete, unit/typecheck/biome green) — capturing
-  `network.request` metadata into a no-op sink. **Not yet live-smoked.**
+  **Fase 2 M1–M4 DONE and committed** — the capture layer records `network.request`
+  with headers + redacted bodies into an on-disk JSONL WAL. **Live-smoked green**
+  (M2/M3/M4). Remaining in Fase 2: **M5** (more event families) + **M6** (`bun run check`).
 - **Vendor-analytics kill-switch DONE + verified** — no telemetry can egress to
-  BrowserOS infra (PostHog server + agent + Sentry hard-disabled). Our own
-  `@fleet/telemetry` layer has zero network egress (local NoopSink only).
-- **Working tree has uncommitted changes** from this session (additive pkg
-  `packages/fleet-telemetry`, the main.ts seam, the kill-switch). Nothing committed
-  yet — `git status` to review; commit when ready.
+  BrowserOS infra. Our `@fleet/telemetry` layer has **zero third-party egress**
+  (local WAL only).
+- All committed on branch `dev` (see §Commit trail). Working tree clean except the
+  in-progress item you're picking up.
 
-## North-star (sharpened 2026-06-21)
+## North-star
 
 The central telemetry is for **agents to consume**: a first-party telemetry +
 **visualization** system on **Juan's own servers** that future agents query to
 understand how the client terminal is used → map/"paint" processes → spend their
-time smarter in professional production. **HARD CONSTRAINT: telemetry goes ONLY to
+time smarter in professional production. **HARD CONSTRAINTS: telemetry goes ONLY to
 his servers, never any third party, and must not stay merely local** (the Fase-2
-local WAL is just a buffer; Fase 3 ships it onward). This reframes Fase 3 = own
-central pipeline (OTel→Kafka→ClickHouse) + an agent-queryable visualization layer.
+local WAL is just a buffer; Fase 3 ships it onward). Fase 3 = own central pipeline
+(OTel→Kafka→ClickHouse) + an agent-queryable visualization layer.
 
 ## Repo & machine
 
 - Single source of truth: `/Users/juanlopez/agent/agentic-browser/BrowserOS/`
-  (monorepo). Agent lives in `packages/browseros-agent`. The old standalone
-  `BrowserOS-agent` is **archived on GitHub + deleted locally**.
-- Branch `dev`, **0/0 vs `upstream/main`** (current with the community).
-- Runs on the Mac Mini (hostname `Mac`). View the browser GUI via VNC/Screen Sharing.
+  (monorepo). Agent lives in `packages/browseros-agent`.
+- Branch `dev`. Runs on the Mac Mini (hostname `Mac`); view the browser GUI via VNC.
 
-## Dev loop (how to resume)
+## Dev loop
 
 From `packages/browseros-agent`, always first:
 `export PATH="$HOME/.bun/bin:/opt/homebrew/bin:$PATH"`
 
-- One-time/after dep or schema changes: `bun run dev:setup`
-- Start everything (server + agent UI + browser): `bun run dev:watch`
-- Stop: `bun run dev:stop`
+- Start: `bun run dev:watch`  ·  Stop: `bun run dev:stop`  ·  Setup: `bun run dev:setup`
 - Health: `curl http://localhost:9100/health` → `{"status":"ok","cdpConnected":true}`
-- Ports: 9000 CDP · 9100 HTTP/MCP · 9300 legacy. Toolchain: node 20, bun 1.3.14,
-  **go 1.26.4** (required — dev orchestrator is a Go binary).
-- Per-machine `.env` fixes (gitignored, redo on each machine): align
-  `apps/agent/.env.development` ports to 9000/9100/9300; comment out empty
-  `GRAPHQL_SCHEMA_PATH=`. (Details in the dev-env memory.)
-- A `bun run dev:watch` may still be running in the background from the last session.
+- Ports: 9000 CDP · 9100 HTTP/MCP · 9300 legacy. Toolchain: node 20, bun 1.3.14, go 1.26.4.
+- Per-machine `.env` fixes (gitignored): align `apps/agent/.env.development` ports to
+  9000/9100/9300; comment out empty `GRAPHQL_SCHEMA_PATH=`.
 
-## What's done
+## The capture layer — `packages/fleet-telemetry/`
 
-- **Pivot:** monorepo = SoT; standalone archived/deleted; dev loop re-established
-  with the new Go tooling + ports.
-- **Fase 1 (decide capture mechanism + taxonomy):** see `adr-0001-network-capture.md`
-  and `taxonomy-v0.md`. Network capture was unwired in the server; a throwaway spike
-  proved CDP server-side capture is rich (metadata + cross-origin + XHR/beacons),
-  found the on-demand-attach gap, and proved bodies need the **primary** session.
-- **Fase 2 plan + de-risk:** see `fase-2-plan.md`. De-risk PASSED: bodies on our
-  auto-attached primary session (31/31), no regression to MCP tools, byte-0 capture
-  of untouched tabs. Mechanism = **root auto-attach with pause-on-start on the
-  server's CDP connection**, subscribed globally via `CdpBackend.onSessionEvent`.
+Merge-isolated additive package (`@fleet/telemetry`). Imports only `@browseros/shared`,
+`@browseros/cdp-protocol`, `zod` — **no server internals**. Wired at one seam in
+`apps/server/src/main.ts`.
 
-## Key code anchors (verified)
+**Data flow:** CDP (root auto-attach, pause-on-start → byte-0) → `CaptureController`
+(correlate; fetch body on the OWNING session at `bodies` level) → `Redactor`
+(mandatory, on-device) → `Normalizer` (taxonomy-v0 envelope) → `LocalSink` (JSONL WAL).
 
-- Network capture seam: `apps/server/src/browser/core/pages.ts` `attach()` +
-  `session.ts` `onSessionAttached`; observer template `observer/frames.ts`.
-- **Global per-session event hook:** `CdpBackend.onSessionEvent(event, handler)` at
-  `apps/server/src/browser/backends/cdp.ts:457`.
+| File | Role |
+|---|---|
+| `src/create.ts` | Factory `createTelemetry(deps, config?)`; default OFF → inert. Builds LocalSink + CaptureController. |
+| `src/config.ts` | `resolveTelemetryConfig(env)` (zod). |
+| `src/types.ts` | Structural contracts (no server imports). |
+| `src/controller.ts` | Auto-attach, global `onSessionEvent`, correlation, epoch re-arm, body fetch. |
+| `src/redactor.ts` | Pure redaction: headers→sha256, body scrub (JWT/Bearer/cred fields/IBAN/**Luhn-gated card**), size cap, sha256. |
+| `src/normalizer.ts` | Pure CDP→envelope builders. |
+| `src/sink/local-sink.ts` | JSONL WAL: rotation, total-size cap (drop-oldest + counter), `segments()` drain API for Fase 3. |
+| `src/*.test.ts` | 30 unit tests. |
+| `scripts/inspect.ts` | **Dev tooling** — human-readable view of the WAL. |
+
+### Config (env)
+
+| Var | Default | Meaning |
+|---|---|---|
+| `BROWSEROS_TELEMETRY_ENABLED` | `false` | Master switch; inert when off. |
+| `BROWSEROS_TELEMETRY_LEVEL` | `metadata` | `metadata` \| `headers` \| `bodies`. |
+| `BROWSEROS_TELEMETRY_BODY_MAX` | `65536` | Stored body cap; larger → truncated (full-body sha256 kept). |
+| `BROWSEROS_TELEMETRY_WAL_DIR` | derived | Default `<data dir>/telemetry`. |
+
+`LOG_LEVEL=debug` needed to see per-event logs (orchestrator doesn't set
+`NODE_ENV=development`, so logger defaults to `info`).
+
+## How to run & verify
+
+```bash
+cd packages/browseros-agent
+export PATH="$HOME/.bun/bin:/opt/homebrew/bin:$PATH"
+
+# Capture everything incl. bodies, live:
+bun run dev:stop
+BROWSEROS_TELEMETRY_ENABLED=true BROWSEROS_TELEMETRY_LEVEL=bodies bun run dev:watch
+# …browse, or: curl -s -X PUT "http://localhost:9000/json/new?https://www.cnn.com"
+
+# 1) Logic — 30 unit tests
+bun test packages/fleet-telemetry
+
+# 2) See what was captured (the WAL inspector)
+bun packages/fleet-telemetry/scripts/inspect.ts            # summary + redaction stats
+bun packages/fleet-telemetry/scripts/inspect.ts --samples 5
+bun packages/fleet-telemetry/scripts/inspect.ts --bodies   # only events with a captured body
+bun packages/fleet-telemetry/scripts/inspect.ts --grep amazon
+
+# 3) Privacy spot-checks on the raw WAL
+grep -o '"Cookie":"[^"]*"' ~/.browseros-dev/telemetry/events.jsonl | head   # must be sha256:
+grep -c '\[redacted' ~/.browseros-dev/telemetry/events.jsonl
+```
+
+WAL lives at `~/.browseros-dev/telemetry/events.jsonl` (dev; `0700` dir / `0600` files).
+
+## What's verified
+
+- **M2** (network metadata) — live: byte-0 capture on agent-untouched/new tabs (192 events on a fresh cnn.com tab).
+- **M3** (headers + bodies + Redactor) — live: 532 bodies on cnn.com, 0 fetch failures, redaction firing; Luhn fix verified.
+- **M4** (WAL) — live: ~480 valid JSONL events on disk with real redacted bodies; survived an ungraceful kill (durability via periodic flush).
+- All: package + server typecheck, biome, 30 unit tests green; pre-commit hooks green.
+
+**Not yet live-verified (unit-tested instead):** CDP reconnect re-arm; graceful
+`close()` stats (`dev:stop` hard-kills); header redaction live (sample had no
+auth/cookie headers).
+
+## Privacy / kill-switch
+
+- Our layer = zero third-party egress (local WAL only).
+- Upstream vendor analytics (server PostHog, agent-UI PostHog incl. session replay,
+  Sentry) **hard-disabled** via `packages/shared/src/constants/fork.ts`
+  `VENDOR_TELEMETRY_DISABLED=true` (commit `9de5a2c5`).
+- Still-live to `llm.browseros.com` (FUNCTIONAL, not telemetry — left intact):
+  LLM provider config + Klavis MCP proxy. Only carries data if the built-in
+  BrowserOS LLM/connectors are used vs. own keys. Revisit in Fase 4.
+
+## Key code anchors
+
+- Capture seam in server: `apps/server/src/main.ts` (`createTelemetry` after `cdp.connect()`).
+- **Global per-session event hook:** `CdpBackend.onSessionEvent` at `apps/server/src/browser/backends/cdp.ts:457`.
 - CDP Network bindings: `packages/cdp-protocol/src/generated/{domains,domain-apis}/network.ts`.
-- Agent-action choke point: `apps/server/src/agent/tool-adapter.ts`.
-- **Fork kill-switch:** `packages/shared/src/constants/fork.ts` →
-  `VENDOR_TELEMETRY_DISABLED=true`. Honored in `lib/metrics.ts` (PostHog client
-  never built), `lib/sentry.ts` (`enabled:false`+dsn undefined), and
-  `apps/agent/lib/analytics/posthog.ts` (inline const — agent has no shared dep).
-  `REQUIRED_FOR_PRODUCTION` in `env.ts` no longer requires SENTRY_DSN/POSTHOG_API_KEY.
-- **Still-live egress to `llm.browseros.com` (FUNCTIONAL, not telemetry — left intact):**
-  `BROWSEROS_CONFIG_URL` (LLM provider config) + Klavis connector proxy. Only carry
-  data if Juan uses the built-in BrowserOS LLM provider / connectors vs his own API
-  keys. Revisit in Fase 4 when wiring his own LLM routing. Remote Hermes OFF (JWT gate).
-- Vendor URLs: `packages/shared/src/constants/urls.ts`
-  (KLAVIS_PROXY, POSTHOG_DEFAULT, AGENT_CONTROL_WORKER).
-- DB: `lib/db/` (Drizzle); no events/audit table yet.
+- Agent-action choke point (for M5): `apps/server/src/agent/tool-adapter.ts`.
+- WAL dir resolution: `apps/server/src/lib/browseros-dir.ts` `getBrowserosDir()`.
 
-## Immediate next step
+## Commit trail (branch `dev`)
 
-**Fase 2 — M1 DONE (2026-06-21).** Additive pkg `packages/fleet-telemetry`
-(`@fleet/telemetry`; narrow exports `./create`/`./config`/`./types`; deps
-`@browseros/shared`+`zod`) with structural contracts (`TelemetryCdp`,
-`TelemetrySink`, `TelemetryController`), env-driven config (default OFF;
-`BROWSEROS_TELEMETRY_ENABLED|_LEVEL|_BODY_MAX|_WAL_DIR`), a no-op logging sink,
-and a skeleton `CaptureController`. Wired at ONE seam in `apps/server/src/main.ts`
-(construct + `start()` after `cdp.connect()`, best-effort `stop()` on shutdown).
-Green: server+pkg typecheck, 5 unit tests, biome. Not runtime-smoked (no dev loop
-was up) — compile-level verified.
+| Commit | What |
+|---|---|
+| `9de5a2c5` | Hard-disable vendor analytics egress |
+| `f7782abd` | Capture layer Fase 2 M1 (skeleton) + M2 (network metadata) |
+| `cf3cd320` | M3 — headers + bodies + Redactor (Luhn-gated cards) |
+| `5e7c3e53` | M4 — on-disk WAL LocalSink |
 
-**Fase 2 — M2 DONE (2026-06-21), code-complete + unit/typecheck verified (not yet
-live-smoked).** `CaptureController` does the real capture: root auto-attach
-pause-on-start (`Target.setAutoAttach{waitForDebuggerOnStart:true,flatten:true}`),
-per-attach `Network.enable` BEFORE `Runtime.runIfWaitingForDebugger` (byte-0),
-global `onSessionEvent` for the four Network lifecycle events, correlation keyed
-`${sessionId}:${requestId}` (redirect-aware; drop-oldest cap 8192), and epoch-poll
-re-arm on reconnect. Emits taxonomy-v0 `network.request` **metadata only** to the
-NoopSink. New pkg files: `normalizer.ts` (pure builders), `test-helpers.ts`
-(`FakeCdp`/`CollectingSink`), `normalizer.test.ts`, `controller.test.ts`. `types.ts`
-expanded (`TelemetryCdp` needs `session()`+`Target`; added `TelemetryContext`);
-`@browseros/cdp-protocol` added as a pkg dep. main.ts shim now passes `context`
-(install_id/versions/os/channel). 14 tests + both typechecks + biome green.
+## Next steps
 
-**Vendor-analytics kill-switch DONE (2026-06-21) — verified.** Audit found 3 upstream
-analytics sinks to BrowserOS infra (server PostHog, agent-UI PostHog incl. session
-replay, Sentry w/ `sendDefaultPii`), all gated by build-inlined keys (OFF in dev).
-Killed via `VENDOR_TELEMETRY_DISABLED` (see anchors). Runtime-verified: with a fake
-POSTHOG_API_KEY set, `metrics.isEnabled()===false`. server+agent+shared typecheck +
-biome green.
-
-**Next — pick one to resume:**
-1. **Live smoke (M2 validation):** `BROWSEROS_TELEMETRY_ENABLED=true bun run
-   dev:watch` on the Mini, browse a heavy site, confirm `Fleet telemetry capture
-   started`, per-event debug logs, and reconnect re-arm.
-2. **Continue Fase 2:** M3 bodies on the primary session
-   (`getResponseBody`/`getRequestPostData`) + Redactor; M4 WAL; M5
-   agent/navigation/page.lifecycle families; M6 tests (`bun run check`).
-3. **Design Fase 3** now that the north-star is sharpened (own central pipeline +
-   agent-queryable visualization). The LocalSink/WAL is the buffer Fase 3 ships from.
+1. **M5** — wire remaining taxonomy-v0 families on the same pipeline:
+   `agent.action`/`agent.mcp_request` (hook `agent/tool-adapter.ts`; fold the existing
+   `tool_executed`/`mcp.request` rollup), `navigation` + `page.lifecycle` (subscribe to
+   `Page.*` CDP events), `app.event` passthrough for the ~90 agent-UI events.
+2. **M6** — full `bun run check` green; close Fase 2.
+3. **Fase 3** — ship from `LocalSink.segments()` to own infra + visualization/agent-query layer.
+4. **Fase 5** — fleet identity: fill `device_id`/`company_id`/`user_id` (null placeholders today).
 
 ## Open decisions
 
-- **Package namespace `<co>`** — provisional `fleet-telemetry`; brand TBD.
-- **Capture bodies always vs selective** — chosen "everything incl. bodies"; revisit
-  for volume/cost. Redaction is mandatory regardless.
-- **WAL format** — JSONL (recommended) vs sqlite events table.
+- **Package brand/namespace** — provisional `@fleet/telemetry`; brand TBD.
 - **Central infra location** (Fase 3) — cloud / on-prem / managed.
-- **`device_id` source** (Fase 5).
-
-## Roadmap (remaining)
-
-Fase 2 capture layer → Fase 3 own central infra (OTel→Kafka→ClickHouse) → Fase 4 cut
-vendor cord → Fase 5 fleet identity/enrollment → Fase 6 distribution + auto-update
-(Apple Developer ID + Omaha — start the Apple Developer ID procurement early) →
-Fase 7 scale & harden.
+- **`device_id` source** (Fase 5) — hardware UUID vs generated-and-stored.
+- **WebSocket frame capture depth** — metadata-only vs payloads.
 
 ## Artifacts
 
 - Docs (in repo): `docs/fleet-telemetry/{adr-0001-network-capture,taxonomy-v0,fase-2-plan,HANDOVER}.md`
 - Memory: `browseros-project`, `browseros-fork-strategy`, `browseros-dev-env-runbook`,
-  `browseros-remote-build-setup`, `browseros-telemetry-build`.
+  `browseros-telemetry-build`, `browseros-remote-build-setup`.
