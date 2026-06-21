@@ -24,8 +24,10 @@ export const INLINED_ENV = {
   AGENT_RUNNER_JWT_SECRET: process.env.AGENT_RUNNER_JWT_SECRET,
 } as const
 
+// Fork: SENTRY_DSN and POSTHOG_API_KEY are intentionally NOT required — vendor
+// analytics is hard-disabled (see @browseros/shared/constants/fork), so a prod
+// build ships without those secrets. BROWSEROS_CONFIG_URL stays: it's the LLM
+// provider config endpoint (functional), not telemetry.
 export const REQUIRED_FOR_PRODUCTION = [
-  'SENTRY_DSN',
-  'POSTHOG_API_KEY',
   'BROWSEROS_CONFIG_URL',
 ] as const satisfies readonly (keyof typeof INLINED_ENV)[]

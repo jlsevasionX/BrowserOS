@@ -2,7 +2,16 @@ import posthog from 'posthog-js'
 import 'posthog-js/dist/posthog-recorder'
 import { env } from '../env'
 
-if (env.VITE_PUBLIC_POSTHOG_KEY && env.VITE_PUBLIC_POSTHOG_HOST) {
+// Fork: hard kill-switch for vendor analytics. No PostHog (incl. session
+// replay/autocapture) may egress to BrowserOS infra, even if keys are inlined.
+// This fork captures its own first-party telemetry instead.
+const VENDOR_TELEMETRY_DISABLED = true
+
+if (
+  !VENDOR_TELEMETRY_DISABLED &&
+  env.VITE_PUBLIC_POSTHOG_KEY &&
+  env.VITE_PUBLIC_POSTHOG_HOST
+) {
   posthog.init(env.VITE_PUBLIC_POSTHOG_KEY, {
     api_host: env.VITE_PUBLIC_POSTHOG_HOST,
     person_profiles: 'identified_only',

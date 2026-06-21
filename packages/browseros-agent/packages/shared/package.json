@@ -13,6 +13,10 @@
       "types": "./src/constants/exit-codes.ts",
       "default": "./src/constants/exit-codes.ts"
     },
+    "./constants/fork": {
+      "types": "./src/constants/fork.ts",
+      "default": "./src/constants/fork.ts"
+    },
     "./constants/ports": {
       "types": "./src/constants/ports.ts",
       "default": "./src/constants/ports.ts"

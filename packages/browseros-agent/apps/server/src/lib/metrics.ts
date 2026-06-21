@@ -2,6 +2,7 @@
  * @license
  * Copyright 2025 BrowserOS
  */
+import { VENDOR_TELEMETRY_DISABLED } from '@browseros/shared/constants/fork'
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { PostHog } from 'posthog-node'
 
@@ -154,7 +155,9 @@ class MetricsService {
   initialize(config: MetricsConfig): void {
     this.config = { ...this.config, ...config }
 
-    if (!this.client && POSTHOG_API_KEY) {
+    // Fork: never construct the vendor PostHog client — no analytics may
+    // egress to BrowserOS infra. This fork captures its own telemetry.
+    if (!this.client && POSTHOG_API_KEY && !VENDOR_TELEMETRY_DISABLED) {
       this.client = new PostHog(POSTHOG_API_KEY, {
         host: EXTERNAL_URLS.POSTHOG_DEFAULT,
       })
