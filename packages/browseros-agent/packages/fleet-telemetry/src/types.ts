@@ -88,6 +88,8 @@ export interface TelemetrySink {
   write(event: TelemetryEvent): void
   /** Flush buffered events; called on graceful shutdown. */
   flush(): Promise<void>
+  /** Release resources (timers, handles) at shutdown. Optional. */
+  close?(): Promise<void>
 }
 
 /** Lifecycle handle the server holds. */
@@ -101,4 +103,9 @@ export interface TelemetryDeps {
   cdp: TelemetryCdp
   logger: LoggerInterface
   context: TelemetryContext
+  /**
+   * Default WAL directory, resolved by the server from its data dir (keeps the
+   * package free of server path logic). `config.walDir` (env) overrides it.
+   */
+  walDir?: string
 }

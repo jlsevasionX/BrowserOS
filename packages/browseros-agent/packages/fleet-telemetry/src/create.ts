@@ -8,9 +8,11 @@
  * the server's start()/stop() calls are always safe to make unconditionally.
  */
 
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { resolveTelemetryConfig, type TelemetryConfig } from './config'
 import { CaptureController } from './controller'
-import { NoopSink } from './sink/noop-sink'
+import { LocalSink } from './sink/local-sink'
 import type { TelemetryController, TelemetryDeps } from './types'
 
 const INERT_CONTROLLER: TelemetryController = {
@@ -33,7 +35,10 @@ export function createTelemetry(
     return INERT_CONTROLLER
   }
 
-  const sink = new NoopSink(deps.logger)
+  const walDir =
+    config.walDir || deps.walDir || join(homedir(), '.browseros', 'telemetry')
+  const sink = new LocalSink({ dir: walDir, logger: deps.logger })
+  deps.logger.info('Fleet telemetry WAL', { dir: walDir })
   const runId = crypto.randomUUID()
   return new CaptureController(
     deps.cdp,

@@ -112,6 +112,7 @@ export class CaptureController implements TelemetryController {
     this.inflight.clear()
     this.sessionMeta.clear()
     await this.sink.flush()
+    await this.sink.close?.()
     this.logger.info('Fleet telemetry capture stopped', {
       droppedInflight: this.droppedInflight,
       bodyFail: this.bodyFail,

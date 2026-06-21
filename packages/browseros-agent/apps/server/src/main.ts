@@ -25,6 +25,7 @@ import {
 import {
   cleanOldSessions,
   ensureBrowserosDir,
+  getBrowserosDir,
   getDbPath,
   removeServerConfigSync,
   writeServerConfig,
@@ -77,6 +78,7 @@ export class Application {
     this.telemetry = createTelemetry({
       cdp,
       logger,
+      walDir: path.join(getBrowserosDir(), 'telemetry'),
       context: {
         install_id: identity.getBrowserOSId(),
         browseros_version: this.config.instanceBrowserosVersion ?? '',
