@@ -14,7 +14,9 @@
  * reconnect (the connection epoch bumps; sessions and the auto-attach setting are
  * gone after a reconnect, but our event subscriptions persist on the backend).
  *
- * M2 scope: `network.request` at metadata depth. Bodies + redaction are M3.
+ * Capture depth follows `config.captureLevel`: `metadata` (M2) | `headers` |
+ * `bodies` (M3). Headers ride along in the buffered events; bodies are fetched on
+ * the OWNING session at terminal success and pass through the mandatory Redactor.
  * Nested-target recursion (workers under a page) is deferred; root auto-attach
  * already covers pages/tabs and browser-level workers.
  */
@@ -34,6 +36,7 @@ import {
   type EventCorrelation,
   type NetworkRecord,
 } from './normalizer'
+import { Redactor } from './redactor'
 import type {
   TelemetryCdp,
   TelemetryContext,
@@ -66,6 +69,9 @@ export class CaptureController implements TelemetryController {
   private readonly inflight = new Map<string, Inflight>()
   private readonly sessionMeta = new Map<string, SessionMeta>()
   private droppedInflight = 0
+  /** Count of body fetches that failed (cache/redirect/no-content — expected). */
+  private bodyFail = 0
+  private readonly redactor: Redactor
 
   constructor(
     private readonly cdp: TelemetryCdp,
@@ -75,7 +81,9 @@ export class CaptureController implements TelemetryController {
     private readonly context: TelemetryContext,
     /** Browser-run id stamped as `session_id` on every envelope. */
     private readonly runId: string,
-  ) {}
+  ) {
+    this.redactor = new Redactor(config.bodyMaxBytes)
+  }
 
   async start(): Promise<void> {
     if (this.started) return
@@ -89,7 +97,7 @@ export class CaptureController implements TelemetryController {
     this.logger.info('Fleet telemetry capture started', {
       captureLevel: this.config.captureLevel,
       epoch: this.epoch,
-      stage: 'M2-network-metadata',
+      stage: 'M3-network',
     })
   }
 
@@ -106,6 +114,7 @@ export class CaptureController implements TelemetryController {
     await this.sink.flush()
     this.logger.info('Fleet telemetry capture stopped', {
       droppedInflight: this.droppedInflight,
+      bodyFail: this.bodyFail,
     })
   }
 
@@ -176,7 +185,9 @@ export class CaptureController implements TelemetryController {
     if (p.redirectResponse) {
       const prior = this.inflight.get(key)
       if (prior) {
-        this.emit(prior.correlation, {
+        // Redirect hops carry no fetchable body (the requestId is reused for the
+        // final response), so headers only — never a body fetch.
+        this.emit(sid, prior.correlation, {
           start: prior.start,
           response: p.redirectResponse,
           outcome: 'ok',
@@ -200,12 +211,18 @@ export class CaptureController implements TelemetryController {
     const f = this.inflight.get(key)
     if (!f) return
     this.inflight.delete(key)
-    this.emit(f.correlation, {
-      start: f.start,
-      response: f.response,
-      encodedDataLength: p.encodedDataLength,
-      outcome: 'ok',
-    })
+    // Only the terminal success path fetches bodies — on the OWNING session.
+    this.emit(
+      sid,
+      f.correlation,
+      {
+        start: f.start,
+        response: f.response,
+        encodedDataLength: p.encodedDataLength,
+        outcome: 'ok',
+      },
+      true,
+    )
   }
 
   private onLoadingFailed(p: LoadingFailedEvent, sid: string): void {
@@ -213,7 +230,7 @@ export class CaptureController implements TelemetryController {
     const f = this.inflight.get(key)
     if (!f) return
     this.inflight.delete(key)
-    this.emit(f.correlation, {
+    this.emit(sid, f.correlation, {
       start: f.start,
       response: f.response,
       outcome: p.canceled ? 'canceled' : 'failed',
@@ -231,7 +248,89 @@ export class CaptureController implements TelemetryController {
     }
   }
 
-  private emit(correlation: EventCorrelation, record: NetworkRecord): void {
+  /**
+   * Build + redact + write. At `headers`/`bodies` level, headers (already in the
+   * buffered events) are redacted inline. At `bodies` level on the terminal
+   * success path, bodies are fetched on the owning session, redacted, then
+   * written asynchronously (fetch must run before the resource is evicted).
+   */
+  private emit(
+    sid: string,
+    correlation: EventCorrelation,
+    record: NetworkRecord,
+    fetchBodies = false,
+  ): void {
+    if (this.config.captureLevel !== 'metadata') {
+      record.requestHeaders = this.redactor.headers(
+        record.start.request.headers,
+      )
+      if (record.response?.headers) {
+        record.responseHeaders = this.redactor.headers(record.response.headers)
+      }
+    }
+    if (fetchBodies && this.config.captureLevel === 'bodies') {
+      void this.enrichAndWrite(sid, correlation, record)
+      return
+    }
+    this.write(correlation, record)
+  }
+
+  /** Fetch request/response bodies on the OWNING session, redact, then write. */
+  private async enrichAndWrite(
+    sid: string,
+    correlation: EventCorrelation,
+    record: NetworkRecord,
+  ): Promise<void> {
+    const requestId = record.start.requestId
+    const resourceType = record.start.type
+    const req = record.start.request
+    try {
+      const session = this.cdp.session(sid)
+      if (req.postData) {
+        record.requestBody = this.redactor.body(
+          req.postData,
+          false,
+          resourceType,
+        )
+      } else if (req.hasPostData) {
+        try {
+          const r = await session.Network.getRequestPostData({ requestId })
+          record.requestBody = this.redactor.body(
+            r.postData,
+            r.base64Encoded ?? false,
+            resourceType,
+          )
+        } catch (error) {
+          this.bodyFail++
+          this.logger.debug('getRequestPostData failed', {
+            requestId,
+            error: errMsg(error),
+          })
+        }
+      }
+      if (this.redactor.shouldCaptureBody(resourceType)) {
+        try {
+          const r = await session.Network.getResponseBody({ requestId })
+          record.responseBody = this.redactor.body(
+            r.body,
+            r.base64Encoded,
+            resourceType,
+          )
+        } catch (error) {
+          // Expected for cached/redirected/no-content responses (de-risk: 34/40).
+          this.bodyFail++
+          this.logger.debug('getResponseBody failed', {
+            requestId,
+            error: errMsg(error),
+          })
+        }
+      }
+    } finally {
+      this.write(correlation, record)
+    }
+  }
+
+  private write(correlation: EventCorrelation, record: NetworkRecord): void {
     const event = buildEnvelope({
       context: this.context,
       sessionId: this.runId,

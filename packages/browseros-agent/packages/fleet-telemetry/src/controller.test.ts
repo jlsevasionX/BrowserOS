@@ -16,15 +16,24 @@ import {
 
 const SID = 'session-A'
 
-function makeController(cdp: FakeCdp, sink: CollectingSink): CaptureController {
+function makeController(
+  cdp: FakeCdp,
+  sink: CollectingSink,
+  over: Partial<typeof DEFAULT_TELEMETRY_CONFIG> = {},
+): CaptureController {
   return new CaptureController(
     cdp,
-    { ...DEFAULT_TELEMETRY_CONFIG, enabled: true },
+    { ...DEFAULT_TELEMETRY_CONFIG, enabled: true, ...over },
     sink,
     silentLogger,
     testContext,
     'run-1',
   )
+}
+
+/** Let fire-and-forget body fetches (a couple of awaited CDP calls) settle. */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve()
 }
 
 function attach(cdp: FakeCdp, over: Record<string, unknown> = {}): void {
@@ -164,6 +173,126 @@ describe('CaptureController network correlation', () => {
       url: 'https://api.test/v2',
       outcome: 'ok',
     })
+    await controller.stop()
+  })
+})
+
+describe('CaptureController capture levels (M3)', () => {
+  test('headers level attaches redacted request/response headers, no body', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    const controller = makeController(cdp, sink, { captureLevel: 'headers' })
+    await controller.start()
+    attach(cdp)
+    await Promise.resolve()
+
+    cdp.emitSession(
+      'Network.requestWillBeSent',
+      requestWillBeSent({
+        request: {
+          url: 'https://api.test/v1',
+          method: 'POST',
+          headers: { Authorization: 'Bearer xyz', Accept: 'application/json' },
+        },
+      }),
+      SID,
+    )
+    cdp.emitSession(
+      'Network.responseReceived',
+      {
+        requestId: 'r1',
+        response: {
+          url: 'https://api.test/v1',
+          status: 200,
+          mimeType: 'application/json',
+          headers: {
+            'Set-Cookie': 'sid=abc',
+            'Content-Type': 'application/json',
+          },
+        },
+      },
+      SID,
+    )
+    cdp.emitSession(
+      'Network.loadingFinished',
+      { requestId: 'r1', encodedDataLength: 5 },
+      SID,
+    )
+    await flush()
+
+    expect(sink.events).toHaveLength(1)
+    const p = sink.events[0].payload as Record<string, Record<string, string>>
+    expect(p.request_headers.Authorization).toMatch(/^sha256:/)
+    expect(p.request_headers.Accept).toBe('application/json')
+    expect(p.response_headers['Set-Cookie']).toMatch(/^sha256:/)
+    expect(p.response_body).toBeUndefined()
+    await controller.stop()
+  })
+
+  test('bodies level fetches + redacts the response body on the owning session', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    cdp.responseBodies.set('r1', {
+      body: '{"token":"sk-secret","ok":true}',
+      base64Encoded: false,
+    })
+    const controller = makeController(cdp, sink, { captureLevel: 'bodies' })
+    await controller.start()
+    attach(cdp)
+    await Promise.resolve()
+
+    cdp.emitSession(
+      'Network.requestWillBeSent',
+      requestWillBeSent({ type: 'XHR' }),
+      SID,
+    )
+    cdp.emitSession(
+      'Network.responseReceived',
+      {
+        requestId: 'r1',
+        response: { url: 'https://api.test/v1', status: 200, headers: {} },
+      },
+      SID,
+    )
+    cdp.emitSession(
+      'Network.loadingFinished',
+      { requestId: 'r1', encodedDataLength: 31 },
+      SID,
+    )
+    await flush()
+
+    expect(sink.events).toHaveLength(1)
+    const body = (sink.events[0].payload as Record<string, unknown>)
+      .response_body as { captured: boolean; content: string; sha256: string }
+    expect(body.captured).toBe(true)
+    expect(body.content).toContain('"ok":true')
+    expect(body.content).not.toContain('sk-secret')
+    expect(body.sha256).toMatch(/^[0-9a-f]{64}$/)
+    await controller.stop()
+  })
+
+  test('bodies level still emits when the body fetch misses (cache/redirect)', async () => {
+    const cdp = new FakeCdp() // no seeded body ⇒ getResponseBody rejects
+    const sink = new CollectingSink()
+    const controller = makeController(cdp, sink, { captureLevel: 'bodies' })
+    await controller.start()
+
+    cdp.emitSession(
+      'Network.requestWillBeSent',
+      requestWillBeSent({ type: 'Document' }),
+      SID,
+    )
+    cdp.emitSession(
+      'Network.loadingFinished',
+      { requestId: 'r1', encodedDataLength: 9 },
+      SID,
+    )
+    await flush()
+
+    expect(sink.events).toHaveLength(1)
+    expect(
+      (sink.events[0].payload as Record<string, unknown>).response_body,
+    ).toBeUndefined()
     await controller.stop()
   })
 })

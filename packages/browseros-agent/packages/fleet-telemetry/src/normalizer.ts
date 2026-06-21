@@ -6,8 +6,9 @@
  * Pure CDP-event → taxonomy-v0 envelope builders. No I/O, no clock, no randomness
  * (ts + event_id are injected) so every builder is deterministic and unit-testable.
  *
- * M2 fills the `network.request` family at metadata depth: headers and bodies are
- * intentionally omitted here and land in M3 behind the Redactor.
+ * M2 filled the `network.request` family at metadata depth. M3 adds optional
+ * already-redacted headers and body descriptors: the controller fetches+redacts
+ * them and stashes them on the record; this stays pure and just shapes the output.
  */
 
 import type {
@@ -16,6 +17,7 @@ import type {
   ResourceTiming,
   Response,
 } from '@browseros/cdp-protocol/domains/network'
+import type { BodyDescriptor, RedactedHeaders } from './redactor'
 import type { TelemetryContext, TelemetryEvent } from './types'
 
 export type NetworkOutcome = 'ok' | 'failed' | 'canceled'
@@ -30,6 +32,12 @@ export interface NetworkRecord {
   outcome: NetworkOutcome
   errorText?: string
   blockedReason?: string
+  /** Redacted (M3). Present only at `headers`/`bodies` capture level. */
+  requestHeaders?: RedactedHeaders
+  responseHeaders?: RedactedHeaders
+  /** Redacted body descriptors (M3). Present only at `bodies` capture level. */
+  requestBody?: BodyDescriptor
+  responseBody?: BodyDescriptor
 }
 
 /** Correlation fields resolved from the owning target/frame. */
@@ -80,7 +88,7 @@ export function buildNetworkPayload(
 ): Record<string, unknown> {
   const { start, response } = record
   const req = start.request
-  return {
+  const payload: Record<string, unknown> = {
     request_id: start.requestId,
     method: req.method,
     url: req.url,
@@ -101,6 +109,12 @@ export function buildNetworkPayload(
       record.encodedDataLength ?? response?.encodedDataLength ?? 0,
     timing: response?.timing ? mapTiming(response.timing) : null,
   }
+  // M3: only present when the capture level kept them (already redacted).
+  if (record.requestHeaders) payload.request_headers = record.requestHeaders
+  if (record.responseHeaders) payload.response_headers = record.responseHeaders
+  if (record.requestBody) payload.request_body = record.requestBody
+  if (record.responseBody) payload.response_body = record.responseBody
+  return payload
 }
 
 function normalizeInitiator(initiator: Initiator): {

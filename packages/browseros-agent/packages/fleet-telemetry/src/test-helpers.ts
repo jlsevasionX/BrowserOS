@@ -50,6 +50,15 @@ export class FakeCdp implements TelemetryCdp {
   autoAttachCalls = 0
   enabledSessions: string[] = []
   releasedSessions: string[] = []
+  /** Seed bodies keyed by requestId; absent ⇒ the CDP call rejects (cache miss). */
+  readonly responseBodies = new Map<
+    string,
+    { body: string; base64Encoded: boolean }
+  >()
+  readonly postBodies = new Map<
+    string,
+    { postData: string; base64Encoded: boolean }
+  >()
 
   readonly Target = {
     setAutoAttach: async () => {
@@ -83,6 +92,16 @@ export class FakeCdp implements TelemetryCdp {
       Network: {
         enable: async () => {
           this.enabledSessions.push(sessionId)
+        },
+        getResponseBody: async ({ requestId }: { requestId: string }) => {
+          const hit = this.responseBodies.get(requestId)
+          if (!hit) throw new Error('No resource with given identifier found')
+          return hit
+        },
+        getRequestPostData: async ({ requestId }: { requestId: string }) => {
+          const hit = this.postBodies.get(requestId)
+          if (!hit) throw new Error('No post data for given request')
+          return hit
         },
       },
       Runtime: {
