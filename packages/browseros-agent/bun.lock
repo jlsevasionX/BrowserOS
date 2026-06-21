@@ -150,6 +150,7 @@
         "@ai-sdk/provider": "^3.0.8",
         "@browseros/cdp-protocol": "workspace:*",
         "@browseros/shared": "workspace:*",
+        "@fleet/telemetry": "workspace:*",
         "@hono/mcp": "^0.2.3",
         "@hono/zod-validator": "^0.4.3",
         "@modelcontextprotocol/sdk": "^1.27.1",
@@ -195,6 +196,15 @@
     "packages/cdp-protocol": {
       "name": "@browseros/cdp-protocol",
       "version": "0.0.1",
+    },
+    "packages/fleet-telemetry": {
+      "name": "@fleet/telemetry",
+      "version": "0.0.1",
+      "dependencies": {
+        "@browseros/cdp-protocol": "workspace:*",
+        "@browseros/shared": "workspace:*",
+        "zod": "^3.24.2",
+      },
     },
     "packages/shared": {
       "name": "@browseros/shared",
@@ -644,6 +654,8 @@
     "@fallow-cli/win32-x64-msvc": ["@fallow-cli/win32-x64-msvc@2.85.0", "", { "os": "win32", "cpu": "x64" }, "sha512-T/rhJ4KBa87hrhrY8upUVQ+oc9kGRWyVWxx84DHeElq5foNgxEut43LgrbzuP3ErIeSuA+GGnLZsGhrGiMTCUw=="],
 
     "@fastify/busboy": ["@fastify/busboy@3.2.0", "", {}, "sha512-m9FVDXU3GT2ITSe0UaMA5rU3QkfC/UXtCU8y0gSN/GugTqtVldOBWIB5V6V3sbmenVZUIpU6f+mPEO2+m5iTaA=="],
+
+    "@fleet/telemetry": ["@fleet/telemetry@workspace:packages/fleet-telemetry"],
 
     "@floating-ui/core": ["@floating-ui/core@1.7.3", "", { "dependencies": { "@floating-ui/utils": "^0.2.10" } }, "sha512-sGnvb5dmrJaKEZ+LDIpguvdX3bDlEllmv4/ClQ9awcmCZrlx5jQyyMWFM5kBI+EyNOCDDiKk8il0zeuX3Zlg/w=="],
 
@@ -4010,6 +4022,8 @@
     "@emotion/serialize/@emotion/unitless": ["@emotion/unitless@0.10.0", "", {}, "sha512-dFoMUuQA20zvtVTuxZww6OHoJYgrzfKM1t52mVySDJnMSEa08ruEvdYQbhvyu6soU+NeLVd3yKfTfT0NeV6qGg=="],
 
     "@esbuild-kit/core-utils/esbuild": ["esbuild@0.18.20", "", { "optionalDependencies": { "@esbuild/android-arm": "0.18.20", "@esbuild/android-arm64": "0.18.20", "@esbuild/android-x64": "0.18.20", "@esbuild/darwin-arm64": "0.18.20", "@esbuild/darwin-x64": "0.18.20", "@esbuild/freebsd-arm64": "0.18.20", "@esbuild/freebsd-x64": "0.18.20", "@esbuild/linux-arm": "0.18.20", "@esbuild/linux-arm64": "0.18.20", "@esbuild/linux-ia32": "0.18.20", "@esbuild/linux-loong64": "0.18.20", "@esbuild/linux-mips64el": "0.18.20", "@esbuild/linux-ppc64": "0.18.20", "@esbuild/linux-riscv64": "0.18.20", "@esbuild/linux-s390x": "0.18.20", "@esbuild/linux-x64": "0.18.20", "@esbuild/netbsd-x64": "0.18.20", "@esbuild/openbsd-x64": "0.18.20", "@esbuild/sunos-x64": "0.18.20", "@esbuild/win32-arm64": "0.18.20", "@esbuild/win32-ia32": "0.18.20", "@esbuild/win32-x64": "0.18.20" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-ceqxoedUrcayh7Y7ZX6NdbbDzGROiyVBgC4PriJThBKSVPWnnFHZAkfI1lJT8QFkOwH4qOS2SJkS4wvpGl8BpA=="],
+
+    "@fleet/telemetry/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "@graphql-codegen/add/tslib": ["tslib@2.6.2", "", {}, "sha512-AEYxH93jGFPn/a2iVAwW87VuUIkR1FVUKB77NwMF7nBTDkDrrT/Hpt/IrCJ0QXhW27jTBDcf5ZY7w6RiqTMw2Q=="],
 

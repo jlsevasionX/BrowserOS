@@ -1,0 +1,28 @@
+{
+  "name": "@fleet/telemetry",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@browseros/cdp-protocol": "workspace:*",
+    "@browseros/shared": "workspace:*",
+    "zod": "^3.24.2"
+  },
+  "exports": {
+    "./create": {
+      "types": "./src/create.ts",
+      "default": "./src/create.ts"
+    },
+    "./config": {
+      "types": "./src/config.ts",
+      "default": "./src/config.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    }
+  }
+}

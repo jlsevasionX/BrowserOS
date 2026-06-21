@@ -11,6 +11,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
+import { createTelemetry } from '@fleet/telemetry/create'
+import type { TelemetryController } from '@fleet/telemetry/types'
 import { createHttpServer } from './api/server'
 import { CdpBackend } from './browser/backends/cdp'
 import { Browser } from './browser/browser'
@@ -38,6 +40,7 @@ import { VERSION } from './version'
 
 export class Application {
   private config: ServerConfig
+  private telemetry: TelemetryController | null = null
 
   constructor(config: ServerConfig) {
     this.config = config
@@ -66,6 +69,28 @@ export class Application {
       logger.info(`Connected to CDP on port ${this.config.cdpPort}`)
     } catch (error) {
       return this.handleStartupError('CDP', this.config.cdpPort, error)
+    }
+
+    // Fleet-telemetry capture layer (additive). Inert unless
+    // BROWSEROS_TELEMETRY_ENABLED=true, so this is safe to start
+    // unconditionally. M2 captures network.request metadata.
+    this.telemetry = createTelemetry({
+      cdp,
+      logger,
+      context: {
+        install_id: identity.getBrowserOSId(),
+        browseros_version: this.config.instanceBrowserosVersion ?? '',
+        chromium_version: this.config.instanceChromiumVersion ?? '',
+        os: telemetryOs(),
+        channel: process.env.NODE_ENV === 'production' ? 'prod' : 'dev',
+      },
+    })
+    try {
+      await this.telemetry.start()
+    } catch (error) {
+      logger.warn('Fleet telemetry failed to start; continuing without it', {
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
 
     const browser = new Browser(cdp)
@@ -137,6 +162,11 @@ export class Application {
   stop(reason?: string): void {
     logger.info('Shutting down server...', { reason })
     removeServerConfigSync()
+
+    // Best-effort: process.exit below is immediate, so this flush can't be
+    // awaited. The on-disk WAL (M4) is crash-safe by design, so a missed flush
+    // on a hard kill costs at most the in-memory tail.
+    this.telemetry?.stop().catch(() => {})
 
     // Immediate exit without graceful shutdown. Chromium may kill us on update/restart,
     // and we need to free the port instantly so the HTTP port doesn't keep switching.
@@ -259,4 +289,10 @@ export class Application {
     logger.info(`  HTTP Server: http://127.0.0.1:${this.config.serverPort}`)
     logger.info('')
   }
+}
+
+function telemetryOs(): 'macos' | 'windows' | 'linux' {
+  if (process.platform === 'darwin') return 'macos'
+  if (process.platform === 'win32') return 'windows'
+  return 'linux'
 }
