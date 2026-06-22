@@ -460,6 +460,40 @@ describe('CaptureController.track (M5b push families)', () => {
   })
 })
 
+describe('CaptureController shipper lifecycle', () => {
+  test('starts and stops the shipper with the capture lifecycle', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    const calls: string[] = []
+    const shipper = {
+      start: () => calls.push('start'),
+      stop: async () => {
+        calls.push('stop')
+      },
+    }
+    const controller = new CaptureController(
+      cdp,
+      {
+        enabled: true,
+        captureLevel: 'metadata',
+        bodyMaxBytes: 1024,
+        walDir: '',
+        ingestUrl: 'x',
+        ingestToken: '',
+        shipIntervalMs: 1000,
+      },
+      sink,
+      silentLogger,
+      testContext,
+      'run-1',
+      shipper,
+    )
+    await controller.start()
+    await controller.stop()
+    expect(calls).toEqual(['start', 'stop'])
+  })
+})
+
 describe('CaptureController reconnect', () => {
   test('re-arms auto-attach when the epoch changes', async () => {
     const cdp = new FakeCdp()

@@ -74,6 +74,7 @@ export class CaptureController implements TelemetryController {
     private readonly context: TelemetryContext,
     /** Browser-run id stamped as `session_id` on every envelope. */
     private readonly runId: string,
+    private readonly shipper?: { start(): void; stop(): Promise<void> },
   ) {
     this.network = new NetworkCapture(
       cdp,
@@ -99,6 +100,7 @@ export class CaptureController implements TelemetryController {
       epoch: this.epoch,
       stage: 'M3-network',
     })
+    this.shipper?.start()
   }
 
   /**
@@ -131,6 +133,7 @@ export class CaptureController implements TelemetryController {
     for (const off of this.unsubscribers.splice(0)) off()
     this.network.reset()
     this.sessionMeta.clear()
+    await this.shipper?.stop()
     await this.sink.flush()
     await this.sink.close?.()
     this.logger.info('Fleet telemetry capture stopped', this.network.stats)

@@ -12,6 +12,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolveTelemetryConfig, type TelemetryConfig } from './config'
 import { CaptureController } from './controller'
+import { FetchTransport, Shipper } from './ship/shipper'
 import { LocalSink } from './sink/local-sink'
 import type { TelemetryController, TelemetryDeps } from './types'
 
@@ -41,6 +42,15 @@ export function createTelemetry(
   const sink = new LocalSink({ dir: walDir, logger: deps.logger })
   deps.logger.info('Fleet telemetry WAL', { dir: walDir })
   const runId = crypto.randomUUID()
+  const shipper = config.ingestUrl
+    ? new Shipper({
+        wal: sink,
+        transport: new FetchTransport(config.ingestUrl, config.ingestToken),
+        logger: deps.logger,
+        intervalMs: config.shipIntervalMs,
+      })
+    : undefined
+  if (shipper) deps.logger.info('Fleet telemetry shipper enabled')
   return new CaptureController(
     deps.cdp,
     config,
@@ -48,5 +58,6 @@ export function createTelemetry(
     deps.logger,
     deps.context,
     runId,
+    shipper,
   )
 }
