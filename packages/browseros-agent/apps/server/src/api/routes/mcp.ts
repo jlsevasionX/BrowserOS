@@ -8,6 +8,7 @@ import { StreamableHTTPTransport } from '@hono/mcp'
 import { Hono } from 'hono'
 import type { Browser } from '../../browser/browser'
 import type { BrowserSession } from '../../browser/core/session'
+import { trackMcpRequest } from '../../lib/fleet-telemetry'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
@@ -45,6 +46,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
   app.post('/', async (c) => {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
     metrics.log('mcp.request', { scopeId })
+    trackMcpRequest({ scopeId })
 
     // Lets the host pin every browser tool call in this request to a
     // specific window for page-creating tools.

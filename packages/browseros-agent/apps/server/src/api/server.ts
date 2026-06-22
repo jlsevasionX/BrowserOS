@@ -38,6 +38,7 @@ import { createRemoteHermesRoutes } from './routes/remote-hermes'
 import { createScreencastRoute } from './routes/screencast'
 import { createShutdownRoute } from './routes/shutdown'
 import { createStatusRoute } from './routes/status'
+import { createTelemetryRoutes } from './routes/telemetry'
 import {
   connectKlavisInBackground,
   type KlavisProxyRef,
@@ -201,6 +202,7 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/screencast', createScreencastRoute({ browser }))
+    .route('/telemetry', createTelemetryRoutes())
     .route('/agents', agentRoutes)
     .route(
       '/remote-hermes',

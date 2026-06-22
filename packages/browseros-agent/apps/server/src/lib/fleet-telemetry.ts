@@ -51,3 +51,22 @@ export function argKeysOf(params: unknown): string[] {
     ? Object.keys(params as Record<string, unknown>)
     : []
 }
+
+/** Emit an `agent.mcp_request` (taxonomy v0) for one inbound MCP call. */
+export function trackMcpRequest(event: { scopeId: string }): void {
+  if (!handle) return
+  handle.track('agent.mcp_request', { scope_id: event.scopeId })
+}
+
+/**
+ * Emit an `app.event` passthrough for a product-UI analytics event forwarded
+ * from the agent extension. The original event name rides in `payload.name`
+ * (taxonomy §4) with its properties spread alongside.
+ */
+export function trackAppEvent(
+  name: string,
+  properties?: Record<string, unknown>,
+): void {
+  if (!handle) return
+  handle.track('app.event', { name, ...(properties ?? {}) })
+}

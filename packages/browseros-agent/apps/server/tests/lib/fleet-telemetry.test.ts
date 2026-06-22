@@ -9,6 +9,8 @@ import {
   argKeysOf,
   setFleetTelemetry,
   trackAgentAction,
+  trackAppEvent,
+  trackMcpRequest,
 } from '../../src/lib/fleet-telemetry'
 
 interface Tracked {
@@ -63,6 +65,39 @@ describe('fleet-telemetry server accessor', () => {
       arg_keys: ['url'],
       error: 'boom',
     })
+  })
+
+  test('forwards an agent.mcp_request with the scope id', () => {
+    const tracked: Tracked[] = []
+    setFleetTelemetry(fakeController(tracked))
+
+    trackMcpRequest({ scopeId: 'scope-7' })
+
+    expect(tracked).toHaveLength(1)
+    expect(tracked[0].type).toBe('agent.mcp_request')
+    expect(tracked[0].payload).toEqual({ scope_id: 'scope-7' })
+  })
+
+  test('forwards an app.event with name + spread properties', () => {
+    const tracked: Tracked[] = []
+    setFleetTelemetry(fakeController(tracked))
+
+    trackAppEvent('ui.message.like', { extension_version: '1.0.0', count: 2 })
+
+    expect(tracked).toHaveLength(1)
+    expect(tracked[0].type).toBe('app.event')
+    expect(tracked[0].payload).toEqual({
+      name: 'ui.message.like',
+      extension_version: '1.0.0',
+      count: 2,
+    })
+  })
+
+  test('app.event tolerates missing properties', () => {
+    const tracked: Tracked[] = []
+    setFleetTelemetry(fakeController(tracked))
+    trackAppEvent('ui.conversation.reset')
+    expect(tracked[0].payload).toEqual({ name: 'ui.conversation.reset' })
   })
 
   test('argKeysOf returns only top-level key names', () => {
