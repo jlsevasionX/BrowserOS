@@ -21,6 +21,11 @@ const TelemetryConfigSchema = z.object({
   bodyMaxBytes: z.number().int().positive(),
   /** Directory for the local WAL (M4). Empty = derive from the data dir. */
   walDir: z.string(),
+  /** Central ingest base URL. Empty ⇒ Shipper inert (WAL-only). */
+  ingestUrl: z.string(),
+  ingestToken: z.string(),
+  /** Ship-loop cadence in ms. */
+  shipIntervalMs: z.number().int().positive(),
 })
 
 export type TelemetryConfig = z.infer<typeof TelemetryConfigSchema>
@@ -30,6 +35,9 @@ export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
   captureLevel: 'metadata',
   bodyMaxBytes: 64 * 1024,
   walDir: '',
+  ingestUrl: '',
+  ingestToken: '',
+  shipIntervalMs: 15_000,
 }
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {
@@ -70,5 +78,14 @@ export function resolveTelemetryConfig(
       DEFAULT_TELEMETRY_CONFIG.bodyMaxBytes,
     ),
     walDir: env.BROWSEROS_TELEMETRY_WAL_DIR ?? DEFAULT_TELEMETRY_CONFIG.walDir,
+    ingestUrl:
+      env.BROWSEROS_TELEMETRY_INGEST_URL ?? DEFAULT_TELEMETRY_CONFIG.ingestUrl,
+    ingestToken:
+      env.BROWSEROS_TELEMETRY_INGEST_TOKEN ??
+      DEFAULT_TELEMETRY_CONFIG.ingestToken,
+    shipIntervalMs: parseInt10(
+      env.BROWSEROS_TELEMETRY_SHIP_INTERVAL_MS,
+      DEFAULT_TELEMETRY_CONFIG.shipIntervalMs,
+    ),
   })
 }

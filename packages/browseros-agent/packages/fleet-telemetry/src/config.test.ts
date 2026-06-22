@@ -28,6 +28,9 @@ describe('resolveTelemetryConfig', () => {
       captureLevel: 'bodies',
       bodyMaxBytes: 2048,
       walDir: '/tmp/wal',
+      ingestUrl: '',
+      ingestToken: '',
+      shipIntervalMs: 15000,
     })
   })
 
@@ -40,6 +43,24 @@ describe('resolveTelemetryConfig', () => {
     expect(cfg.enabled).toBe(true)
     expect(cfg.captureLevel).toBe(DEFAULT_TELEMETRY_CONFIG.captureLevel)
     expect(cfg.bodyMaxBytes).toBe(DEFAULT_TELEMETRY_CONFIG.bodyMaxBytes)
+  })
+
+  test('resolves shipper config from env', () => {
+    const c = resolveTelemetryConfig({
+      BROWSEROS_TELEMETRY_ENABLED: 'true',
+      BROWSEROS_TELEMETRY_INGEST_URL: 'https://t.example/',
+      BROWSEROS_TELEMETRY_INGEST_TOKEN: 'secret',
+      BROWSEROS_TELEMETRY_SHIP_INTERVAL_MS: '5000',
+    } as NodeJS.ProcessEnv)
+    expect(c.ingestUrl).toBe('https://t.example/')
+    expect(c.ingestToken).toBe('secret')
+    expect(c.shipIntervalMs).toBe(5000)
+  })
+
+  test('shipper config defaults to inert (empty url, 15s interval)', () => {
+    const c = resolveTelemetryConfig({} as NodeJS.ProcessEnv)
+    expect(c.ingestUrl).toBe('')
+    expect(c.shipIntervalMs).toBe(15000)
   })
 })
 
