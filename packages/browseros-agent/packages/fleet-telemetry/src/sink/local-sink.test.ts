@@ -131,4 +131,32 @@ describe('LocalSink', () => {
     expect(new Set(moreSegs).size).toBe(moreSegs.length)
     await b.close()
   })
+
+  test('forceRotate seals the active segment so it appears in segments()', async () => {
+    const sink = new LocalSink({
+      dir,
+      logger: silentLogger,
+      flushIntervalMs: 0,
+    })
+    sink.write(evt(1))
+    sink.write(evt(2))
+    await sink.forceRotate()
+
+    const segs = await sink.segments()
+    expect(segs).toHaveLength(1)
+    const lines = (await readFile(segs[0], 'utf8')).trim().split('\n')
+    expect(lines).toHaveLength(2)
+    await sink.close()
+  })
+
+  test('forceRotate is a no-op when nothing was written', async () => {
+    const sink = new LocalSink({
+      dir,
+      logger: silentLogger,
+      flushIntervalMs: 0,
+    })
+    await sink.forceRotate()
+    expect(await sink.segments()).toHaveLength(0)
+    await sink.close()
+  })
 })

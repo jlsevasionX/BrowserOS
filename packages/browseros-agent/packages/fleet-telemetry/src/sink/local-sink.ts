@@ -123,6 +123,15 @@ export class LocalSink implements TelemetrySink {
     })
   }
 
+  /** Flush buffered lines, then seal the active segment if it has any bytes. */
+  async forceRotate(): Promise<void> {
+    await this.enqueueDrain()
+    this.chain = this.chain.then(async () => {
+      if (this.activeBytes > 0) await this.rotate()
+    })
+    await this.chain
+  }
+
   /** Rotated segments oldest-first; the drain target for Fase 3 (excludes active). */
   async segments(): Promise<string[]> {
     let entries: string[]
