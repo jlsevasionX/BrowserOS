@@ -2,6 +2,7 @@ import type { LanguageModelV2ToolResultOutput } from '@ai-sdk/provider'
 import { type ToolSet, tool } from 'ai'
 import type { Browser } from '../browser/browser'
 import type { BrowserSession } from '../browser/core/session'
+import { argKeysOf, trackAgentAction } from '../lib/fleet-telemetry'
 import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
 import {
@@ -97,11 +98,19 @@ export function buildBrowserToolSet(
             session,
             signal,
           }))
+        const durationMs = Math.round(performance.now() - startTime)
         metrics.log('tool_executed', {
           tool_name: def.name,
-          duration_ms: Math.round(performance.now() - startTime),
+          duration_ms: durationMs,
           success: !result.isError,
           source: 'chat',
+        })
+        trackAgentAction({
+          tool: def.name,
+          source: 'browser',
+          result: result.isError ? 'error' : 'ok',
+          durationMs,
+          argKeys: argKeysOf(params),
         })
         return { content: result.content, isError: result.isError ?? false }
       },
@@ -151,11 +160,19 @@ export function buildLegacyBrowserToolSet(
         const signal = withBrowserToolTimeout(executeOptions?.abortSignal)
         try {
           const result = await executeLegacyTool(def, params, context, signal)
+          const durationMs = Math.round(performance.now() - startTime)
           metrics.log('tool_executed', {
             tool_name: def.name,
-            duration_ms: Math.round(performance.now() - startTime),
+            duration_ms: durationMs,
             success: !result.isError,
             source: 'chat',
+          })
+          trackAgentAction({
+            tool: def.name,
+            source: 'legacy',
+            result: result.isError ? 'error' : 'ok',
+            durationMs,
+            argKeys: argKeysOf(params),
           })
           return {
             content: result.content,
@@ -169,12 +186,21 @@ export function buildLegacyBrowserToolSet(
             tool: def.name,
             error: errorText,
           })
+          const durationMs = Math.round(performance.now() - startTime)
           metrics.log('tool_executed', {
             tool_name: def.name,
-            duration_ms: Math.round(performance.now() - startTime),
+            duration_ms: durationMs,
             success: false,
             error_message: errorText,
             source: 'chat',
+          })
+          trackAgentAction({
+            tool: def.name,
+            source: 'legacy',
+            result: 'error',
+            durationMs,
+            argKeys: argKeysOf(params),
+            error: errorText,
           })
           return {
             content: [{ type: 'text' as const, text: errorText }],

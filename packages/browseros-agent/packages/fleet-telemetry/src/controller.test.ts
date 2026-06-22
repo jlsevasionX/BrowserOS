@@ -424,6 +424,42 @@ describe('CaptureController page.lifecycle + navigation (M5a)', () => {
   })
 })
 
+describe('CaptureController.track (M5b push families)', () => {
+  test('emits a server-originated event with a null correlation by default', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    const controller = makeController(cdp, sink)
+    await controller.start()
+
+    controller.track('agent.action', {
+      tool: 'navigate_page',
+      source: 'browser',
+      result: 'ok',
+    })
+
+    const e = sink.events.find((ev) => ev.type === 'agent.action')
+    expect(e).toBeDefined()
+    expect(e?.session_id).toBe('run-1')
+    expect(e?.tab_id).toBeNull()
+    expect(e?.frame_id).toBeNull()
+    expect(e?.payload).toMatchObject({ tool: 'navigate_page', result: 'ok' })
+    await controller.stop()
+  })
+
+  test('honors a supplied correlation', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    const controller = makeController(cdp, sink)
+    await controller.start()
+
+    controller.track('agent.action', { tool: 'click' }, { tab_id: 12 })
+
+    const e = sink.events.find((ev) => ev.type === 'agent.action')
+    expect(e?.tab_id).toBe(12)
+    await controller.stop()
+  })
+})
+
 describe('CaptureController reconnect', () => {
   test('re-arms auto-attach when the epoch changes', async () => {
     const cdp = new FakeCdp()

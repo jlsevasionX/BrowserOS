@@ -18,6 +18,7 @@ import type { TelemetryController, TelemetryDeps } from './types'
 const INERT_CONTROLLER: TelemetryController = {
   async start() {},
   async stop() {},
+  track() {},
 }
 
 /**

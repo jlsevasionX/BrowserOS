@@ -95,10 +95,26 @@ export interface TelemetrySink {
   close?(): Promise<void>
 }
 
+/** Optional correlation for a pushed (non-CDP) event. */
+export interface TelemetryCorrelation {
+  tab_id?: number | null
+  frame_id?: string | null
+  target_type?: string | null
+}
+
 /** Lifecycle handle the server holds. */
 export interface TelemetryController {
   start(): Promise<void>
   stop(): Promise<void>
+  /**
+   * Emit a non-CDP event (agent.action, app.event, …) onto the same pipeline.
+   * Server-originated families call this through a thin server-side accessor.
+   */
+  track(
+    type: string,
+    payload: Record<string, unknown>,
+    correlation?: TelemetryCorrelation,
+  ): void
 }
 
 /** Everything the factory needs to construct a controller. */

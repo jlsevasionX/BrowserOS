@@ -47,6 +47,7 @@ import type {
   TelemetryCdp,
   TelemetryContext,
   TelemetryController,
+  TelemetryCorrelation,
   TelemetrySink,
 } from './types'
 
@@ -111,6 +112,26 @@ export class CaptureController implements TelemetryController {
       epoch: this.epoch,
       stage: 'M3-network',
     })
+  }
+
+  /**
+   * Emit a server-originated event (no CDP correlation) onto the same pipeline.
+   * Safe to call before start()/after stop() — it only shapes + writes.
+   */
+  track(
+    type: string,
+    payload: Record<string, unknown>,
+    correlation: TelemetryCorrelation = {},
+  ): void {
+    this.writeEvent(
+      type,
+      {
+        tab_id: correlation.tab_id ?? null,
+        frame_id: correlation.frame_id ?? null,
+        target_type: correlation.target_type ?? null,
+      },
+      payload,
+    )
   }
 
   async stop(): Promise<void> {

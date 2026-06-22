@@ -31,6 +31,7 @@ import {
   writeServerConfig,
 } from './lib/browseros-dir'
 import { initializeDb } from './lib/db'
+import { setFleetTelemetry } from './lib/fleet-telemetry'
 import { identity } from './lib/identity'
 import { logger } from './lib/logger'
 import { reconcileUrl } from './lib/mcp-manager'
@@ -89,6 +90,9 @@ export class Application {
     })
     try {
       await this.telemetry.start()
+      // Expose the handle so server-originated families (agent.action) can emit
+      // through the thin lib/fleet-telemetry accessor without threading it down.
+      setFleetTelemetry(this.telemetry)
     } catch (error) {
       logger.warn('Fleet telemetry failed to start; continuing without it', {
         error: error instanceof Error ? error.message : String(error),
@@ -169,6 +173,7 @@ export class Application {
     // awaited. The on-disk WAL (M4) is crash-safe by design, so a missed flush
     // on a hard kill costs at most the in-memory tail.
     this.telemetry?.stop().catch(() => {})
+    setFleetTelemetry(null)
 
     // Immediate exit without graceful shutdown. Chromium may kill us on update/restart,
     // and we need to free the port instantly so the HTTP port doesn't keep switching.
