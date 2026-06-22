@@ -20,8 +20,8 @@ _Last updated: 2026-06-22 (Fase 2 closed — M1–M6)_
 - **Vendor-analytics kill-switch DONE + verified** — no telemetry can egress to
   BrowserOS infra. Our `@fleet/telemetry` layer has **zero third-party egress**
   (local WAL only).
-- All committed on branch `dev` (see §Commit trail). Working tree clean except the
-  in-progress item you're picking up.
+- All committed on branch `dev` (see §Commit trail). **Working tree clean** — all
+  Fase 2 work committed; pick up at Fase 3.
 
 ## North-star
 
@@ -106,14 +106,23 @@ bun run dev:stop
 BROWSEROS_TELEMETRY_ENABLED=true BROWSEROS_TELEMETRY_LEVEL=bodies bun run dev:watch
 # …browse, or: curl -s -X PUT "http://localhost:9000/json/new?https://www.cnn.com"
 
-# 1) Logic — 30 unit tests
+# Drive the push families directly (server half):
+curl -s -X POST http://localhost:9100/telemetry/app-event \
+  -H 'Content-Type: application/json' -d '{"name":"ui.message.sent","properties":{"len":1}}'   # → 204, app.event
+curl -s -X POST http://localhost:9100/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'                                          # → agent.mcp_request
+
+# 1) Logic — 40 pkg unit tests (+ server accessor/route tests)
 bun test packages/fleet-telemetry
+bun test apps/server/tests/lib/fleet-telemetry.test.ts apps/server/tests/api/routes/telemetry.test.ts
 
 # 2) See what was captured (the WAL inspector)
 bun packages/fleet-telemetry/scripts/inspect.ts            # summary + redaction stats
 bun packages/fleet-telemetry/scripts/inspect.ts --samples 5
 bun packages/fleet-telemetry/scripts/inspect.ts --bodies   # only events with a captured body
 bun packages/fleet-telemetry/scripts/inspect.ts --grep amazon
+grep -c '"type":"app.event"' ~/.browseros-dev/telemetry/events.jsonl   # push families land too
 
 # 3) Privacy spot-checks on the raw WAL
 grep -o '"Cookie":"[^"]*"' ~/.browseros-dev/telemetry/events.jsonl | head   # must be sha256:
@@ -132,9 +141,10 @@ WAL lives at `~/.browseros-dev/telemetry/events.jsonl` (dev; `0700` dir / `0600`
 - **M6** (NetworkCapture extraction) — `bun run check` green (incl. the integration suite exercising the tool-adapter seam); network re-smoked live.
 - All: package + server typecheck, biome, 40 unit tests green; pre-commit hooks green.
 
-**Not yet live-verified (unit-tested instead):** CDP reconnect re-arm; graceful
-`close()` stats (`dev:stop` hard-kills); header redaction live (sample had no
-auth/cookie headers).
+**Not yet live-verified (unit-tested instead):** `agent.action` end-to-end (needs
+an LLM chat that triggers a tool call); the agent-side `app.event` forward from a
+built extension; CDP reconnect re-arm; graceful `close()` stats (`dev:stop`
+hard-kills); header redaction live (sample had no auth/cookie headers).
 
 ## Privacy / kill-switch
 
