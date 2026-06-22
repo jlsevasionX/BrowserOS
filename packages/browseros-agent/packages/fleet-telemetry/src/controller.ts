@@ -21,12 +21,6 @@
  * already covers pages/tabs and browser-level workers.
  */
 
-import type {
-  LoadingFailedEvent,
-  LoadingFinishedEvent,
-  RequestWillBeSentEvent,
-  ResponseReceivedEvent,
-} from '@browseros/cdp-protocol/domains/network'
 import type { FrameNavigatedEvent } from '@browseros/cdp-protocol/domains/page'
 import type {
   AttachedToTargetEvent,
@@ -34,15 +28,13 @@ import type {
 } from '@browseros/cdp-protocol/domains/target'
 import type { LoggerInterface } from '@browseros/shared/types/logger'
 import type { TelemetryConfig } from './config'
+import { NetworkCapture } from './network-capture'
 import {
   buildEnvelope,
   buildNavigationPayload,
-  buildNetworkPayload,
   buildPageLifecyclePayload,
   type EventCorrelation,
-  type NetworkRecord,
 } from './normalizer'
-import { Redactor } from './redactor'
 import type {
   TelemetryCdp,
   TelemetryContext,
@@ -53,16 +45,8 @@ import type {
 
 /** How often we check the connection epoch to detect a reconnect. */
 const EPOCH_POLL_MS = 3000
-/** Bound the in-flight correlation map; drop-oldest past this (no silent loss). */
-const MAX_INFLIGHT = 8192
 /** Target types we enable the Page domain on (frameNavigated comes from these). */
 const PAGE_TARGET_TYPES = new Set(['page', 'iframe'])
-
-interface Inflight {
-  start: RequestWillBeSentEvent
-  response?: ResponseReceivedEvent['response']
-  correlation: EventCorrelation
-}
 
 interface SessionMeta {
   tabId: number | null
@@ -78,13 +62,9 @@ export class CaptureController implements TelemetryController {
   private epoch = -1
   private epochTimer: ReturnType<typeof setInterval> | null = null
   private readonly unsubscribers: Array<() => void> = []
-  /** Correlation buffer keyed by `${cdpSessionId}:${requestId}`. */
-  private readonly inflight = new Map<string, Inflight>()
   private readonly sessionMeta = new Map<string, SessionMeta>()
-  private droppedInflight = 0
-  /** Count of body fetches that failed (cache/redirect/no-content — expected). */
-  private bodyFail = 0
-  private readonly redactor: Redactor
+  /** The `network.request` family — correlation, body fetch, redaction. */
+  private readonly network: NetworkCapture
 
   constructor(
     private readonly cdp: TelemetryCdp,
@@ -95,7 +75,14 @@ export class CaptureController implements TelemetryController {
     /** Browser-run id stamped as `session_id` on every envelope. */
     private readonly runId: string,
   ) {
-    this.redactor = new Redactor(config.bodyMaxBytes)
+    this.network = new NetworkCapture(
+      cdp,
+      config,
+      logger,
+      (sid, frameId) => this.correlate(sid, frameId),
+      (type, correlation, payload) =>
+        this.writeEvent(type, correlation, payload),
+    )
   }
 
   async start(): Promise<void> {
@@ -142,14 +129,11 @@ export class CaptureController implements TelemetryController {
       this.epochTimer = null
     }
     for (const off of this.unsubscribers.splice(0)) off()
-    this.inflight.clear()
+    this.network.reset()
     this.sessionMeta.clear()
     await this.sink.flush()
     await this.sink.close?.()
-    this.logger.info('Fleet telemetry capture stopped', {
-      droppedInflight: this.droppedInflight,
-      bodyFail: this.bodyFail,
-    })
+    this.logger.info('Fleet telemetry capture stopped', this.network.stats)
   }
 
   /**
@@ -167,18 +151,7 @@ export class CaptureController implements TelemetryController {
       this.cdp.onSessionEvent('Page.frameNavigated', (p, sid) =>
         this.onFrameNavigated(p as FrameNavigatedEvent, sid),
       ),
-      this.cdp.onSessionEvent('Network.requestWillBeSent', (p, sid) =>
-        this.onRequestWillBeSent(p as RequestWillBeSentEvent, sid),
-      ),
-      this.cdp.onSessionEvent('Network.responseReceived', (p, sid) =>
-        this.onResponseReceived(p as ResponseReceivedEvent, sid),
-      ),
-      this.cdp.onSessionEvent('Network.loadingFinished', (p, sid) =>
-        this.onLoadingFinished(p as LoadingFinishedEvent, sid),
-      ),
-      this.cdp.onSessionEvent('Network.loadingFailed', (p, sid) =>
-        this.onLoadingFailed(p as LoadingFailedEvent, sid),
-      ),
+      ...this.network.subscribe(),
     )
   }
 
@@ -274,67 +247,6 @@ export class CaptureController implements TelemetryController {
     )
   }
 
-  private onRequestWillBeSent(p: RequestWillBeSentEvent, sid: string): void {
-    const key = `${sid}:${p.requestId}`
-    // A redirect reuses the requestId: the prior hop completed with this
-    // redirectResponse. Finalize and emit it before starting the new hop.
-    if (p.redirectResponse) {
-      const prior = this.inflight.get(key)
-      if (prior) {
-        // Redirect hops carry no fetchable body (the requestId is reused for the
-        // final response), so headers only — never a body fetch.
-        this.emit(sid, prior.correlation, {
-          start: prior.start,
-          response: p.redirectResponse,
-          outcome: 'ok',
-        })
-      }
-    }
-    this.inflight.set(key, {
-      start: p,
-      correlation: this.correlate(sid, p.frameId ?? null),
-    })
-    this.enforceCap()
-  }
-
-  private onResponseReceived(p: ResponseReceivedEvent, sid: string): void {
-    const f = this.inflight.get(`${sid}:${p.requestId}`)
-    if (f) f.response = p.response
-  }
-
-  private onLoadingFinished(p: LoadingFinishedEvent, sid: string): void {
-    const key = `${sid}:${p.requestId}`
-    const f = this.inflight.get(key)
-    if (!f) return
-    this.inflight.delete(key)
-    // Only the terminal success path fetches bodies — on the OWNING session.
-    this.emit(
-      sid,
-      f.correlation,
-      {
-        start: f.start,
-        response: f.response,
-        encodedDataLength: p.encodedDataLength,
-        outcome: 'ok',
-      },
-      true,
-    )
-  }
-
-  private onLoadingFailed(p: LoadingFailedEvent, sid: string): void {
-    const key = `${sid}:${p.requestId}`
-    const f = this.inflight.get(key)
-    if (!f) return
-    this.inflight.delete(key)
-    this.emit(sid, f.correlation, {
-      start: f.start,
-      response: f.response,
-      outcome: p.canceled ? 'canceled' : 'failed',
-      errorText: p.errorText,
-      blockedReason: p.blockedReason,
-    })
-  }
-
   private correlate(sid: string, frameId: string | null): EventCorrelation {
     const meta = this.sessionMeta.get(sid)
     return {
@@ -342,92 +254,6 @@ export class CaptureController implements TelemetryController {
       target_type: meta?.targetType ?? null,
       frame_id: frameId,
     }
-  }
-
-  /**
-   * Build + redact + write. At `headers`/`bodies` level, headers (already in the
-   * buffered events) are redacted inline. At `bodies` level on the terminal
-   * success path, bodies are fetched on the owning session, redacted, then
-   * written asynchronously (fetch must run before the resource is evicted).
-   */
-  private emit(
-    sid: string,
-    correlation: EventCorrelation,
-    record: NetworkRecord,
-    fetchBodies = false,
-  ): void {
-    if (this.config.captureLevel !== 'metadata') {
-      record.requestHeaders = this.redactor.headers(
-        record.start.request.headers,
-      )
-      if (record.response?.headers) {
-        record.responseHeaders = this.redactor.headers(record.response.headers)
-      }
-    }
-    if (fetchBodies && this.config.captureLevel === 'bodies') {
-      void this.enrichAndWrite(sid, correlation, record)
-      return
-    }
-    this.write(correlation, record)
-  }
-
-  /** Fetch request/response bodies on the OWNING session, redact, then write. */
-  private async enrichAndWrite(
-    sid: string,
-    correlation: EventCorrelation,
-    record: NetworkRecord,
-  ): Promise<void> {
-    const requestId = record.start.requestId
-    const resourceType = record.start.type
-    const req = record.start.request
-    try {
-      const session = this.cdp.session(sid)
-      if (req.postData) {
-        record.requestBody = this.redactor.body(
-          req.postData,
-          false,
-          resourceType,
-        )
-      } else if (req.hasPostData) {
-        try {
-          const r = await session.Network.getRequestPostData({ requestId })
-          record.requestBody = this.redactor.body(
-            r.postData,
-            r.base64Encoded ?? false,
-            resourceType,
-          )
-        } catch (error) {
-          this.bodyFail++
-          this.logger.debug('getRequestPostData failed', {
-            requestId,
-            error: errMsg(error),
-          })
-        }
-      }
-      if (this.redactor.shouldCaptureBody(resourceType)) {
-        try {
-          const r = await session.Network.getResponseBody({ requestId })
-          record.responseBody = this.redactor.body(
-            r.body,
-            r.base64Encoded,
-            resourceType,
-          )
-        } catch (error) {
-          // Expected for cached/redirected/no-content responses (de-risk: 34/40).
-          this.bodyFail++
-          this.logger.debug('getResponseBody failed', {
-            requestId,
-            error: errMsg(error),
-          })
-        }
-      }
-    } finally {
-      this.write(correlation, record)
-    }
-  }
-
-  private write(correlation: EventCorrelation, record: NetworkRecord): void {
-    this.writeEvent('network.request', correlation, buildNetworkPayload(record))
   }
 
   /** Stamp the common envelope and hand a finished event to the sink. */
@@ -448,22 +274,6 @@ export class CaptureController implements TelemetryController {
     this.sink.write(event)
   }
 
-  private enforceCap(): void {
-    while (this.inflight.size > MAX_INFLIGHT) {
-      const oldest = this.inflight.keys().next().value
-      if (oldest === undefined) break
-      this.inflight.delete(oldest)
-      this.droppedInflight++
-    }
-    // Surface backpressure on the first drop and then every 1k after.
-    if (this.droppedInflight > 0 && this.droppedInflight % 1000 === 1) {
-      this.logger.warn('Telemetry inflight buffer overflow, dropping oldest', {
-        dropped: this.droppedInflight,
-        cap: MAX_INFLIGHT,
-      })
-    }
-  }
-
   private checkEpoch(): void {
     const current = this.cdp.connectionEpoch()
     if (current === this.epoch) return
@@ -473,7 +283,7 @@ export class CaptureController implements TelemetryController {
     })
     // Sessions and the auto-attach setting are gone after a reconnect; the old
     // inflight requestIds are stale. Subscriptions persist on the backend.
-    this.inflight.clear()
+    this.network.reset()
     this.sessionMeta.clear()
     this.armAutoAttach()
       .then(() => {
