@@ -15,8 +15,11 @@
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import type { LoggerInterface } from '@browseros/shared/types/logger'
 
-/** The per-session CDP surface the controller drives (Network + debugger gate). */
-export type TelemetrySessionApi = Pick<ProtocolApi, 'Network' | 'Runtime'>
+/** The per-session CDP surface the controller drives (Network + Page + debugger gate). */
+export type TelemetrySessionApi = Pick<
+  ProtocolApi,
+  'Network' | 'Page' | 'Runtime'
+>
 
 /** The root-level Target surface: arm auto-attach + observe (de)attach events. */
 export type TelemetryTargetApi = Pick<

@@ -17,6 +17,7 @@ import type {
   ResourceTiming,
   Response,
 } from '@browseros/cdp-protocol/domains/network'
+import type { Frame } from '@browseros/cdp-protocol/domains/page'
 import type { BodyDescriptor, RedactedHeaders } from './redactor'
 import type { TelemetryContext, TelemetryEvent } from './types'
 
@@ -115,6 +116,53 @@ export function buildNetworkPayload(
   if (record.requestBody) payload.request_body = record.requestBody
   if (record.responseBody) payload.response_body = record.responseBody
   return payload
+}
+
+/** One opened/closed target (tab, iframe, worker). Source: Target auto-attach. */
+export interface LifecycleRecord {
+  action: 'opened' | 'closed'
+  targetId: string
+  targetType: string | null
+  url: string | null
+  title: string | null
+  openerId: string | null
+}
+
+/** Build the `page.lifecycle` payload from an attach/detach signal. */
+export function buildPageLifecyclePayload(
+  record: LifecycleRecord,
+): Record<string, unknown> {
+  return {
+    action: record.action,
+    target_id: record.targetId,
+    target_type: record.targetType,
+    url: record.url,
+    host: record.url ? hostOf(record.url) : null,
+    title: record.title,
+    opener_id: record.openerId,
+  }
+}
+
+/** Build the `navigation` payload from a committed `Page.frameNavigated`. */
+export function buildNavigationPayload(
+  frame: Frame,
+  navigationType: string,
+): Record<string, unknown> {
+  const url = frame.url + (frame.urlFragment ?? '')
+  return {
+    frame_id: frame.id,
+    parent_frame_id: frame.parentId ?? null,
+    is_main_frame: !frame.parentId,
+    loader_id: frame.loaderId,
+    navigation_type: navigationType,
+    url,
+    host: hostOf(url),
+    domain: frame.domainAndRegistry || null,
+    mime_type: frame.mimeType || null,
+    security_origin: frame.securityOrigin || null,
+    name: frame.name ?? null,
+    unreachable_url: frame.unreachableUrl ?? null,
+  }
 }
 
 function normalizeInitiator(initiator: Initiator): {

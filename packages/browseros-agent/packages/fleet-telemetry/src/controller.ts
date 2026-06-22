@@ -27,12 +27,18 @@ import type {
   RequestWillBeSentEvent,
   ResponseReceivedEvent,
 } from '@browseros/cdp-protocol/domains/network'
-import type { AttachedToTargetEvent } from '@browseros/cdp-protocol/domains/target'
+import type { FrameNavigatedEvent } from '@browseros/cdp-protocol/domains/page'
+import type {
+  AttachedToTargetEvent,
+  DetachedFromTargetEvent,
+} from '@browseros/cdp-protocol/domains/target'
 import type { LoggerInterface } from '@browseros/shared/types/logger'
 import type { TelemetryConfig } from './config'
 import {
   buildEnvelope,
+  buildNavigationPayload,
   buildNetworkPayload,
+  buildPageLifecyclePayload,
   type EventCorrelation,
   type NetworkRecord,
 } from './normalizer'
@@ -48,6 +54,8 @@ import type {
 const EPOCH_POLL_MS = 3000
 /** Bound the in-flight correlation map; drop-oldest past this (no silent loss). */
 const MAX_INFLIGHT = 8192
+/** Target types we enable the Page domain on (frameNavigated comes from these). */
+const PAGE_TARGET_TYPES = new Set(['page', 'iframe'])
 
 interface Inflight {
   start: RequestWillBeSentEvent
@@ -58,6 +66,10 @@ interface Inflight {
 interface SessionMeta {
   tabId: number | null
   targetType: string | null
+  targetId: string | null
+  url: string | null
+  title: string | null
+  openerId: string | null
 }
 
 export class CaptureController implements TelemetryController {
@@ -128,6 +140,12 @@ export class CaptureController implements TelemetryController {
       this.cdp.Target.on('attachedToTarget', (p) => {
         void this.onAttached(p)
       }),
+      this.cdp.Target.on('detachedFromTarget', (p) => {
+        this.onDetached(p as DetachedFromTargetEvent)
+      }),
+      this.cdp.onSessionEvent('Page.frameNavigated', (p, sid) =>
+        this.onFrameNavigated(p as FrameNavigatedEvent, sid),
+      ),
       this.cdp.onSessionEvent('Network.requestWillBeSent', (p, sid) =>
         this.onRequestWillBeSent(p as RequestWillBeSentEvent, sid),
       ),
@@ -153,10 +171,16 @@ export class CaptureController implements TelemetryController {
 
   private async onAttached(p: AttachedToTargetEvent): Promise<void> {
     const sid = p.sessionId
-    this.sessionMeta.set(sid, {
-      tabId: p.targetInfo.tabId ?? null,
-      targetType: p.targetInfo.type ?? null,
-    })
+    const info = p.targetInfo
+    const meta: SessionMeta = {
+      tabId: info.tabId ?? null,
+      targetType: info.type ?? null,
+      targetId: info.targetId ?? null,
+      url: info.url || null,
+      title: info.title || null,
+      openerId: info.openerId ?? null,
+    }
+    this.sessionMeta.set(sid, meta)
     const session = this.cdp.session(sid)
     try {
       // Enable Network BEFORE releasing the debugger so byte-0 is captured.
@@ -166,6 +190,17 @@ export class CaptureController implements TelemetryController {
         sid,
         error: errMsg(error),
       })
+    }
+    if (info.type && PAGE_TARGET_TYPES.has(info.type)) {
+      try {
+        // Page.enable gives us frameNavigated for the `navigation` family.
+        await session.Page.enable()
+      } catch (error) {
+        this.logger.debug('Page.enable failed for session', {
+          sid,
+          error: errMsg(error),
+        })
+      }
     }
     if (p.waitingForDebugger) {
       try {
@@ -177,6 +212,45 @@ export class CaptureController implements TelemetryController {
         })
       }
     }
+    this.emitLifecycle('opened', meta)
+  }
+
+  private onDetached(p: DetachedFromTargetEvent): void {
+    const sid = p.sessionId
+    const meta = this.sessionMeta.get(sid)
+    this.sessionMeta.delete(sid)
+    this.emitLifecycle('closed', meta, p.targetId ?? null)
+  }
+
+  private emitLifecycle(
+    action: 'opened' | 'closed',
+    meta: SessionMeta | undefined,
+    fallbackTargetId: string | null = null,
+  ): void {
+    this.writeEvent(
+      'page.lifecycle',
+      {
+        tab_id: meta?.tabId ?? null,
+        frame_id: null,
+        target_type: meta?.targetType ?? null,
+      },
+      buildPageLifecyclePayload({
+        action,
+        targetId: meta?.targetId ?? fallbackTargetId ?? '',
+        targetType: meta?.targetType ?? null,
+        url: meta?.url ?? null,
+        title: meta?.title ?? null,
+        openerId: meta?.openerId ?? null,
+      }),
+    )
+  }
+
+  private onFrameNavigated(p: FrameNavigatedEvent, sid: string): void {
+    this.writeEvent(
+      'navigation',
+      this.correlate(sid, p.frame.id),
+      buildNavigationPayload(p.frame, p.type),
+    )
   }
 
   private onRequestWillBeSent(p: RequestWillBeSentEvent, sid: string): void {
@@ -332,12 +406,21 @@ export class CaptureController implements TelemetryController {
   }
 
   private write(correlation: EventCorrelation, record: NetworkRecord): void {
+    this.writeEvent('network.request', correlation, buildNetworkPayload(record))
+  }
+
+  /** Stamp the common envelope and hand a finished event to the sink. */
+  private writeEvent(
+    type: string,
+    correlation: EventCorrelation,
+    payload: Record<string, unknown>,
+  ): void {
     const event = buildEnvelope({
       context: this.context,
       sessionId: this.runId,
       correlation,
-      type: 'network.request',
-      payload: buildNetworkPayload(record),
+      type,
+      payload,
       ts: Date.now(),
       eventId: crypto.randomUUID(),
     })

@@ -101,9 +101,9 @@ describe('CaptureController network correlation', () => {
       SID,
     )
 
-    expect(sink.events).toHaveLength(1)
-    const e = sink.events[0]
-    expect(e.type).toBe('network.request')
+    const netEvents = sink.events.filter((e) => e.type === 'network.request')
+    expect(netEvents).toHaveLength(1)
+    const e = netEvents[0]
     expect(e.session_id).toBe('run-1')
     expect(e.tab_id).toBe(3)
     expect(e.target_type).toBe('page')
@@ -220,8 +220,9 @@ describe('CaptureController capture levels (M3)', () => {
     )
     await flush()
 
-    expect(sink.events).toHaveLength(1)
-    const p = sink.events[0].payload as Record<string, Record<string, string>>
+    const netEvents = sink.events.filter((e) => e.type === 'network.request')
+    expect(netEvents).toHaveLength(1)
+    const p = netEvents[0].payload as Record<string, Record<string, string>>
     expect(p.request_headers.Authorization).toMatch(/^sha256:/)
     expect(p.request_headers.Accept).toBe('application/json')
     expect(p.response_headers['Set-Cookie']).toMatch(/^sha256:/)
@@ -261,8 +262,9 @@ describe('CaptureController capture levels (M3)', () => {
     )
     await flush()
 
-    expect(sink.events).toHaveLength(1)
-    const body = (sink.events[0].payload as Record<string, unknown>)
+    const netEvents = sink.events.filter((e) => e.type === 'network.request')
+    expect(netEvents).toHaveLength(1)
+    const body = (netEvents[0].payload as Record<string, unknown>)
       .response_body as { captured: boolean; content: string; sha256: string }
     expect(body.captured).toBe(true)
     expect(body.content).toContain('"ok":true')
@@ -293,6 +295,131 @@ describe('CaptureController capture levels (M3)', () => {
     expect(
       (sink.events[0].payload as Record<string, unknown>).response_body,
     ).toBeUndefined()
+    await controller.stop()
+  })
+})
+
+describe('CaptureController page.lifecycle + navigation (M5a)', () => {
+  test('emits page.lifecycle opened on attach and enables Page for page targets', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    const controller = makeController(cdp, sink)
+    await controller.start()
+
+    cdp.emitTarget('attachedToTarget', {
+      sessionId: SID,
+      waitingForDebugger: true,
+      targetInfo: {
+        type: 'page',
+        tabId: 3,
+        targetId: 'T-1',
+        url: 'https://news.test/home',
+        title: 'Home',
+        openerId: 'T-0',
+      },
+    })
+    await flush()
+
+    expect(cdp.pageEnabledSessions).toContain(SID)
+    const opened = sink.events.find((e) => e.type === 'page.lifecycle')
+    expect(opened).toBeDefined()
+    expect(opened?.tab_id).toBe(3)
+    expect(opened?.payload).toMatchObject({
+      action: 'opened',
+      target_id: 'T-1',
+      target_type: 'page',
+      host: 'news.test',
+      opener_id: 'T-0',
+    })
+    await controller.stop()
+  })
+
+  test('does not enable Page for non-page targets (service workers)', async () => {
+    const cdp = new FakeCdp()
+    const controller = makeController(cdp, new CollectingSink())
+    await controller.start()
+    cdp.emitTarget('attachedToTarget', {
+      sessionId: 'sw-1',
+      waitingForDebugger: false,
+      targetInfo: {
+        type: 'service_worker',
+        targetId: 'SW-1',
+        url: 'https://x.test/sw.js',
+      },
+    })
+    await Promise.resolve()
+    expect(cdp.pageEnabledSessions).not.toContain('sw-1')
+    await controller.stop()
+  })
+
+  test('emits page.lifecycle closed on detach with the stored target info', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    const controller = makeController(cdp, sink)
+    await controller.start()
+    cdp.emitTarget('attachedToTarget', {
+      sessionId: SID,
+      waitingForDebugger: false,
+      targetInfo: {
+        type: 'page',
+        tabId: 5,
+        targetId: 'T-9',
+        url: 'https://a.test/p',
+        title: 'P',
+      },
+    })
+    await flush()
+
+    cdp.emitTarget('detachedFromTarget', { sessionId: SID, targetId: 'T-9' })
+
+    const closed = sink.events.find(
+      (e) => e.type === 'page.lifecycle' && e.payload.action === 'closed',
+    )
+    expect(closed?.payload).toMatchObject({
+      action: 'closed',
+      target_id: 'T-9',
+      target_type: 'page',
+      host: 'a.test',
+    })
+    expect(closed?.tab_id).toBe(5)
+    await controller.stop()
+  })
+
+  test('emits a navigation event on Page.frameNavigated with correlation', async () => {
+    const cdp = new FakeCdp()
+    const sink = new CollectingSink()
+    const controller = makeController(cdp, sink)
+    await controller.start()
+    attach(cdp)
+    await flush()
+
+    cdp.emitSession(
+      'Page.frameNavigated',
+      {
+        frame: {
+          id: 'F-main',
+          loaderId: 'L-1',
+          url: 'https://shop.test/cart',
+          domainAndRegistry: 'shop.test',
+          securityOrigin: 'https://shop.test',
+          mimeType: 'text/html',
+        },
+        type: 'Navigation',
+      },
+      SID,
+    )
+
+    const navs = sink.events.filter((e) => e.type === 'navigation')
+    expect(navs).toHaveLength(1)
+    const e = navs[0]
+    expect(e.tab_id).toBe(3)
+    expect(e.frame_id).toBe('F-main')
+    expect(e.payload).toMatchObject({
+      is_main_frame: true,
+      url: 'https://shop.test/cart',
+      host: 'shop.test',
+      navigation_type: 'Navigation',
+    })
     await controller.stop()
   })
 })

@@ -49,6 +49,7 @@ export class FakeCdp implements TelemetryCdp {
   private targetHandlers = new Map<string, TargetHandler[]>()
   autoAttachCalls = 0
   enabledSessions: string[] = []
+  pageEnabledSessions: string[] = []
   releasedSessions: string[] = []
   /** Seed bodies keyed by requestId; absent ⇒ the CDP call rejects (cache miss). */
   readonly responseBodies = new Map<
@@ -102,6 +103,11 @@ export class FakeCdp implements TelemetryCdp {
           const hit = this.postBodies.get(requestId)
           if (!hit) throw new Error('No post data for given request')
           return hit
+        },
+      },
+      Page: {
+        enable: async () => {
+          this.pageEnabledSessions.push(sessionId)
         },
       },
       Runtime: {

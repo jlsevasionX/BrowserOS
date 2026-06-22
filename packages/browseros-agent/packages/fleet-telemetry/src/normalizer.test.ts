@@ -9,9 +9,12 @@ import type {
   RequestWillBeSentEvent,
   Response,
 } from '@browseros/cdp-protocol/domains/network'
+import type { Frame } from '@browseros/cdp-protocol/domains/page'
 import {
   buildEnvelope,
+  buildNavigationPayload,
   buildNetworkPayload,
+  buildPageLifecyclePayload,
   type NetworkRecord,
 } from './normalizer'
 import { testContext } from './test-helpers'
@@ -110,6 +113,81 @@ describe('buildNetworkPayload', () => {
     const p = buildNetworkPayload(record)
     // "héllo" = 6 UTF-8 bytes (é is 2 bytes).
     expect(p.request_bytes).toBe(6)
+  })
+})
+
+describe('buildPageLifecyclePayload', () => {
+  test('maps an opened target', () => {
+    const p = buildPageLifecyclePayload({
+      action: 'opened',
+      targetId: 'T-1',
+      targetType: 'page',
+      url: 'https://news.test/world?ref=x',
+      title: 'World',
+      openerId: 'T-0',
+    })
+    expect(p).toEqual({
+      action: 'opened',
+      target_id: 'T-1',
+      target_type: 'page',
+      url: 'https://news.test/world?ref=x',
+      host: 'news.test',
+      title: 'World',
+      opener_id: 'T-0',
+    })
+  })
+
+  test('tolerates a closed target with no url', () => {
+    const p = buildPageLifecyclePayload({
+      action: 'closed',
+      targetId: 'T-2',
+      targetType: 'service_worker',
+      url: null,
+      title: null,
+      openerId: null,
+    })
+    expect(p).toMatchObject({ action: 'closed', host: null, opener_id: null })
+  })
+})
+
+describe('buildNavigationPayload', () => {
+  function frame(over: Partial<Frame> = {}): Frame {
+    return {
+      id: 'f-main',
+      loaderId: 'L-1',
+      url: 'https://shop.test/cart',
+      domainAndRegistry: 'shop.test',
+      securityOrigin: 'https://shop.test',
+      mimeType: 'text/html',
+      ...over,
+    } as unknown as Frame
+  }
+
+  test('flags a main-frame committed navigation', () => {
+    const p = buildNavigationPayload(frame(), 'Navigation')
+    expect(p).toMatchObject({
+      frame_id: 'f-main',
+      parent_frame_id: null,
+      is_main_frame: true,
+      loader_id: 'L-1',
+      navigation_type: 'Navigation',
+      url: 'https://shop.test/cart',
+      host: 'shop.test',
+    })
+  })
+
+  test('flags a subframe navigation and appends the url fragment', () => {
+    const p = buildNavigationPayload(
+      frame({
+        parentId: 'f-main',
+        url: 'https://ads.test/iframe',
+        urlFragment: '#promo',
+      }),
+      'Navigation',
+    )
+    expect(p.is_main_frame).toBe(false)
+    expect(p.parent_frame_id).toBe('f-main')
+    expect(p.url).toBe('https://ads.test/iframe#promo')
   })
 })
 
