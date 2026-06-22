@@ -121,7 +121,14 @@ export class Shipper {
     let body: Buffer
     try {
       body = await readFile(path)
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT') {
+        this.logger.warn('Telemetry segment read failed', {
+          path,
+          error: errMsg(error),
+        })
+      }
       return true // file vanished (cap eviction) — skip, keep going
     }
     let status: number
@@ -170,7 +177,6 @@ export class FetchTransport implements ShipTransport {
   constructor(
     url: string,
     private readonly token: string,
-    private readonly logger: LoggerInterface,
   ) {
     this.endpoint = `${url.replace(/\/+$/, '')}/v1/events`
   }
@@ -181,6 +187,7 @@ export class FetchTransport implements ShipTransport {
         authorization: `Bearer ${this.token}`,
         'content-type': 'application/x-ndjson',
       },
+      // Buffer is a valid body in Bun/Node at runtime; the DOM BodyInit type omits it.
       body: body as unknown as BodyInit,
     })
     return res.status
