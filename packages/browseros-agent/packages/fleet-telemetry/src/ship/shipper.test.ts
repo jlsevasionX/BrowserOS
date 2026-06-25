@@ -9,7 +9,12 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { silentLogger } from '../test-helpers'
-import { type ShippableWal, Shipper, type ShipTransport } from './shipper'
+import {
+  FetchTransport,
+  type ShippableWal,
+  Shipper,
+  type ShipTransport,
+} from './shipper'
 
 let dir: string
 beforeEach(async () => {
@@ -100,6 +105,26 @@ describe('Shipper.runOnce', () => {
     expect(
       (await readdir(dir)).filter((f) => f.endsWith('.jsonl')),
     ).toHaveLength(1)
+  })
+
+  test('FetchTransport.send rejects when the request exceeds the timeout', async () => {
+    const server = Bun.serve({
+      port: 0,
+      async fetch() {
+        await Bun.sleep(200)
+        return new Response(null, { status: 204 })
+      },
+    })
+    try {
+      const transport = new FetchTransport(
+        `http://localhost:${server.port}`,
+        'tok',
+        20, // ms — well under the server's 200ms delay
+      )
+      await expect(transport.send(Buffer.from('{}\n'))).rejects.toThrow()
+    } finally {
+      server.stop(true)
+    }
   })
 
   test('drops a poison (400) segment only after maxPoisonAttempts', async () => {

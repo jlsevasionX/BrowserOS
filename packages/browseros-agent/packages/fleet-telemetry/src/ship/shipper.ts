@@ -177,6 +177,7 @@ export class FetchTransport implements ShipTransport {
   constructor(
     url: string,
     private readonly token: string,
+    private readonly requestTimeoutMs: number = 30_000,
   ) {
     this.endpoint = `${url.replace(/\/+$/, '')}/v1/events`
   }
@@ -189,6 +190,7 @@ export class FetchTransport implements ShipTransport {
       },
       // Buffer is a valid body in Bun/Node at runtime; the DOM BodyInit type omits it.
       body: body as unknown as BodyInit,
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     })
     return res.status
   }
