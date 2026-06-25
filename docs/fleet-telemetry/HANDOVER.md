@@ -1,6 +1,6 @@
 # Handover — BrowserOS fork: fleet telemetry (Track B)
 
-_Last updated: 2026-06-22 (Fase 2 closed — M1–M6)_
+_Last updated: 2026-06-25 (Fase 3 MVP subsystem #1 done — central pipeline live, E2E green)_
 
 ## TL;DR — where we are
 
@@ -11,8 +11,14 @@ _Last updated: 2026-06-22 (Fase 2 closed — M1–M6)_
   redacted bodies), `navigation`, `page.lifecycle`, `agent.action`,
   `agent.mcp_request`, and `app.event` (product-UI events forwarded from the
   extension). **Live-smoked green** (M2–M6 CDP families + the server half of the
-  push families). `bun run check` green. **Next: Fase 3** (ship the WAL onward to
-  Juan's own central pipeline + the agent-query/visualization layer).
+  push families). `bun run check` green.
+- **Fase 3 MVP (subsystem #1) DONE** — the WAL now ships to Juan's own central
+  pipeline. Device-side **Shipper** drains rotated WAL segments → `POST /v1/events`
+  (bearer token) → standalone **`fleet-central/`** Bun ingest (Hono) → **ClickHouse**
+  (`ReplacingMergeTree`, dedup by `event_id`), all in Docker (local now → AWS by
+  swapping `.env`). At-least-once; the device contract is frozen at URL+token so
+  OTel/Redpanda/managed slot in central-side later. **E2E green** (see §Fase 3 MVP).
+  **Next: subsystem #2** = the agent-query/visualization layer on top of ClickHouse.
 - **Outstanding live-smoke** (unit/server-verified only): `agent.action` and the
   agent-side `app.event` forward end-to-end through a real LLM chat / built
   extension. Unwired families (optional, post-Fase-2): `network.websocket`,
@@ -179,26 +185,98 @@ hard-kills); header redaction live (sample had no auth/cookie headers).
 | `19ba76ff` | M5b follow-ups — agent.mcp_request + app.event |
 | `4ccb4741` | M6 — extract NetworkCapture; Fase 2 closed |
 
+## Fase 3 MVP — central pipeline
+
+Spec `docs/fleet-telemetry/fase-3-mvp-design.md`; plan
+`docs/fleet-telemetry/fase-3-implementation-plan.md`. Built subagent-driven (T1–T9).
+
+**Guiding principle — freeze the expensive (device), keep the cheap replaceable
+(center).** The device knows ONLY a URL + token and ships our native taxonomy-v0
+JSONL. Everything central-side (store engine, OTel, Redpanda, managed hosting) is
+swappable without touching a single browser.
+
+**Device side (`packages/fleet-telemetry/`):**
+- `src/ship/shipper.ts` — `Shipper` drains `LocalSink.segments()` oldest-first,
+  `POST`s each segment, `unlink`s ONLY on `204`; backoff on 5xx/401/network; drops a
+  poison (400) segment after N tries. `FetchTransport` = `(url, token)` HTTP. Owned by
+  `CaptureController` (start/stop). `LocalSink.forceRotate()` seals the active segment
+  each tick so low-volume events ship promptly.
+- Config (default OFF / inert): `BROWSEROS_TELEMETRY_INGEST_URL`,
+  `BROWSEROS_TELEMETRY_INGEST_TOKEN`, `BROWSEROS_TELEMETRY_SHIP_INTERVAL_MS`
+  (default 15000). No URL ⇒ Shipper inert, WAL-only (today's behavior).
+
+**Central side (`fleet-central/`, standalone — NOT a Bun workspace member):**
+- `ingest/` — Bun + Hono. `POST /v1/events` (bearer auth → 401; JSONL validated
+  against a standalone zod envelope mirror; partial-success keeps valid lines and
+  returns 204; whole-batch-unparseable → 400). `GET /health`. Writes via a
+  `StoreWriter` seam (`MemoryStore` for tests, `ClickHouseStore` in prod).
+- `clickhouse/init/01-schema.sql` — `fleet.events`,
+  `ENGINE=ReplacingMergeTree(ingested_at)`, `ORDER BY (type, ts, event_id)` ⇒
+  at-least-once duplicates collapse under `FINAL`. `payload` stored as JSON string.
+- `docker-compose.yml` — ClickHouse (init SQL + persistent volume + healthcheck) +
+  ingest (waits on a healthy CH, reaches it by service name). Local now → AWS by
+  swapping `.env`. `.env`/`node_modules`/`bun.lock` gitignored.
+
+**Run & verify:**
+```
+cd fleet-central && cp .env.example .env   # set a strong INGEST_TOKEN
+docker compose up --build -d                # → curl localhost:9400/health = {"status":"ok","store":"connected"}
+```
+Device → central (from `packages/browseros-agent`, PATH exported):
+```
+BROWSEROS_TELEMETRY_ENABLED=true BROWSEROS_TELEMETRY_LEVEL=bodies LOG_LEVEL=debug \
+BROWSEROS_TELEMETRY_INGEST_URL=http://localhost:9400 \
+BROWSEROS_TELEMETRY_INGEST_TOKEN=<token> BROWSEROS_TELEMETRY_SHIP_INTERVAL_MS=5000 \
+bun run dev:watch
+```
+Query / dedup:
+```
+docker compose -f fleet-central/docker-compose.yml exec -T clickhouse clickhouse-client \
+  --query "SELECT type, count() FROM fleet.events GROUP BY type ORDER BY 2 DESC"
+# dedup net: SELECT count() AS c FROM fleet.events FINAL WHERE event_id='...'
+```
+
+**E2E result (2026-06-25, live):** real device → local compose → **948 rows** in
+ClickHouse (network.request 924, navigation 18, page.lifecycle 6; 688 with captured
++redacted bodies); total==distinct==FINAL (clean delivery, no loss); dedup proven
+through the live ingest (same `event_id` twice → 2 raw, **1 under FINAL**); bad token
+→ 401. `bun run check` green after M1 (device half). Integration test (T7) proves
+the dedup at the store layer (skipped in CI without `CLICKHOUSE_URL`).
+
+**⚠️ Runtime state (2026-06-25):** the `fleet-central` Docker stack is **LEFT UP**
+(`fleet-central-ingest-1` + `fleet-central-clickhouse-1` healthy, holding the E2E
+sample). Device dev loop is **STOPPED**. To stop the central stack:
+`docker compose -f fleet-central/docker-compose.yml down` (add `-v` to wipe the data
+volume). Unrelated containers `agentic-redpanda/postgres/redpanda-console` are Juan's
+other infra — leave them.
+
+**Deferred (non-blocking, for subsystem #2 / hardening):** commit `bun.lock` +
+`bun install --frozen-lockfile` for reproducible image builds; a blank-body 204
+regression test; integration test id → UUID; `controller.test.ts` is 513 lines
+(>400 warn) — split during subsystem-#2 work.
+
 ## Next steps
 
-1. **Fase 3** — own central pipeline: ship from `LocalSink.segments()` (rotated
-   JSONL, oldest-first drain API already built in M4) to Juan's own infra
-   (OTel→Kafka→ClickHouse) + the visualization/agent-query layer (north-star).
-   Capture goes ONLY to his servers (never any third party).
-2. **Close the outstanding live-smoke** — `agent.action` + the agent-side
-   `app.event` forward end-to-end through a real LLM chat / built extension.
-3. **Optional remaining families** — `network.websocket`, `agent.chat`, `error`.
-4. **Fase 5** — fleet identity: fill `device_id`/`company_id`/`user_id` (null today).
+1. **Subsystem #2** — the agent-query / visualization layer on top of `fleet.events`
+   (the north-star: agents query usage to spend their time smarter). Its own spec →
+   plan cycle.
+2. **Growth path (central-side, device frozen)** — insert OTel + Redpanda in front of
+   the ingest, or add a `StoreWriter` that produces to Redpanda; swap ClickHouse to
+   managed via env. None of this touches the device.
+3. **Close the outstanding live-smoke** — `agent.action` + the agent-side `app.event`
+   forward end-to-end through a real LLM chat / built extension.
+4. **Optional remaining families** — `network.websocket`, `agent.chat`, `error`.
+5. **Fase 5** — fleet identity: fill `device_id`/`company_id`/`user_id` (null today),
+   per-device tokens / rotation (MVP uses one static bearer token).
 
 ## Open decisions
 
-- **Package brand/namespace** — provisional `@fleet/telemetry`; brand TBD.
-- **Central infra location** (Fase 3) — cloud / on-prem / managed.
+- **Package brand/namespace** — provisional `@fleet/telemetry` + `fleet-central`; brand TBD.
 - **`device_id` source** (Fase 5) — hardware UUID vs generated-and-stored.
 - **WebSocket frame capture depth** — metadata-only vs payloads.
 
 ## Artifacts
 
-- Docs (in repo): `docs/fleet-telemetry/{adr-0001-network-capture,taxonomy-v0,fase-2-plan,HANDOVER}.md`
+- Docs (in repo): `docs/fleet-telemetry/{adr-0001-network-capture,taxonomy-v0,fase-2-plan,fase-3-mvp-design,fase-3-implementation-plan,HANDOVER}.md`
 - Memory: `browseros-project`, `browseros-fork-strategy`, `browseros-dev-env-runbook`,
   `browseros-telemetry-build`, `browseros-remote-build-setup`.
