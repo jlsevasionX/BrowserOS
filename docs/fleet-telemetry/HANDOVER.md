@@ -198,9 +198,11 @@ swappable without touching a single browser.
 **Device side (`packages/fleet-telemetry/`):**
 - `src/ship/shipper.ts` — `Shipper` drains `LocalSink.segments()` oldest-first,
   `POST`s each segment, `unlink`s ONLY on `204`; backoff on 5xx/401/network; drops a
-  poison (400) segment after N tries. `FetchTransport` = `(url, token)` HTTP. Owned by
-  `CaptureController` (start/stop). `LocalSink.forceRotate()` seals the active segment
-  each tick so low-volume events ship promptly.
+  poison (400) segment after N tries. `FetchTransport` = `(url, token, requestTimeoutMs=30s)`
+  HTTP with `AbortSignal.timeout` (a hung POST throws → backoff, never wedges the loop).
+  Owned by `CaptureController` (start/stop). `LocalSink.forceRotate()` seals the active
+  segment each tick so low-volume events ship promptly — this deliberately SUPERSEDES the
+  spec's `maxFileAgeMs` (dropped as redundant; the ship interval bounds latency).
 - Config (default OFF / inert): `BROWSEROS_TELEMETRY_INGEST_URL`,
   `BROWSEROS_TELEMETRY_INGEST_TOKEN`, `BROWSEROS_TELEMETRY_SHIP_INTERVAL_MS`
   (default 15000). No URL ⇒ Shipper inert, WAL-only (today's behavior).
