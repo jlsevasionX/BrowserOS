@@ -1357,9 +1357,14 @@ describe('search builders', () => {
 
   test('event search omits absent optional filters', () => {
     const q = buildEventSearch(params(), {})
+    // host/url are always projected in the SELECT (the Explore UI + mapEventRow
+    // need them); assert only that the optional FILTER bindings are absent.
     expect(q.sql).not.toContain('type = {type:String}')
-    expect(q.sql).not.toContain('host')
+    expect(q.sql).not.toContain('= {host:String}')
     expect(q.sql).not.toContain('ILIKE')
+    expect(q.params.type).toBeUndefined()
+    expect(q.params.host).toBeUndefined()
+    expect(q.params.q).toBeUndefined()
   })
 
   test('event-by-id binds the id', () => {
