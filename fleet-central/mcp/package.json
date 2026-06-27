@@ -1,0 +1,21 @@
+{
+  "name": "fleet-mcp",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "start": "bun src/index.ts"
+  },
+  "dependencies": {
+    "@hono/mcp": "^0.2.3",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "hono": "^4.12.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "latest"
+  }
+}
