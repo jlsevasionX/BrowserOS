@@ -183,7 +183,6 @@ export function createApp(opts: AppOptions): Hono {
   })
 
   app.use('/*', serveStatic({ root: './public' }))
-  app.get('/', serveStatic({ path: './public/index.html' }))
 
   return app
 }

@@ -38,7 +38,11 @@ function table(rows, cols, opts = {}) {
   for (const r of rows) {
     const tr = document.createElement('tr')
     if (opts.onClick) { tr.className = 'clickable'; tr.onclick = () => opts.onClick(r) }
-    tr.innerHTML = cols.map((c) => `<td>${c.get(r)}</td>`).join('')
+    for (const c of cols) {
+      const td = document.createElement('td')
+      td.textContent = String(c.get(r))
+      tr.appendChild(td)
+    }
     tb.appendChild(tr)
   }
   t.appendChild(tb)
@@ -117,6 +121,7 @@ const renderers = {
       { label: 'URL', get: (r) => (r.url || '').slice(0, 80) },
     ], {
       onClick: async (r) => {
+        el.querySelectorAll('pre').forEach((p) => p.remove())
         const { data: full } = await api(`/v1/events/${encodeURIComponent(r.event_id)}`)
         const pre = document.createElement('pre')
         pre.textContent = JSON.stringify(full, null, 2)
