@@ -64,3 +64,30 @@ describe('GET /v1/insights/agent-activity', () => {
     expect(res.status).toBe(503)
   })
 })
+
+describe('GET /v1/insights/usage', () => {
+  const auth = { authorization: `Bearer ${TOKEN}` }
+
+  test('shapes {data:{top_hosts,navigations}, meta}', async () => {
+    const reader = new MemoryReader(
+      [{ host: 'a.com', requests: '9' }],
+      [{ bucket: '2023-11-14 22:00:00', navigations: '3' }],
+    )
+    const app = createApp({ reader, token: TOKEN })
+    const res = await app.request('http://x/v1/insights/usage?bucket=day', { headers: auth })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as any
+    expect(body.data.top_hosts[0]).toEqual({ host: 'a.com', requests: 9 })
+    expect(body.data.navigations[0]).toEqual({
+      bucket: '2023-11-14 22:00:00', navigations: 3,
+    })
+  })
+
+  test('503 when the reader throws', async () => {
+    const reader = new MemoryReader()
+    reader.failQueries()
+    const app = createApp({ reader, token: TOKEN })
+    const res = await app.request('http://x/v1/insights/usage', { headers: auth })
+    expect(res.status).toBe(503)
+  })
+})
