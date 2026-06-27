@@ -91,3 +91,32 @@ describe('GET /v1/insights/usage', () => {
     expect(res.status).toBe(503)
   })
 })
+
+describe('GET /v1/insights/health', () => {
+  const auth = { authorization: `Bearer ${TOKEN}` }
+
+  test('shapes the full health object', async () => {
+    const reader = new MemoryReader(
+      [{ status_family: '2xx', count: '5' }],
+      [{ host: 'bad.com', failures: '3' }],
+      [{ url: 'http://slow', total_ms: 900 }],
+      [{ c: '2' }],
+    )
+    const app = createApp({ reader, token: TOKEN })
+    const res = await app.request('http://x/v1/insights/health', { headers: auth })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as any
+    expect(body.data.status_families[0]).toEqual({ status_family: '2xx', count: 5 })
+    expect(body.data.top_failing_hosts[0]).toEqual({ host: 'bad.com', failures: 3 })
+    expect(body.data.slowest[0]).toEqual({ url: 'http://slow', total_ms: 900 })
+    expect(body.data.error_count).toBe(2)
+  })
+
+  test('503 when the reader throws', async () => {
+    const reader = new MemoryReader()
+    reader.failQueries()
+    const app = createApp({ reader, token: TOKEN })
+    const res = await app.request('http://x/v1/insights/health', { headers: auth })
+    expect(res.status).toBe(503)
+  })
+})

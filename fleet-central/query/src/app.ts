@@ -6,6 +6,16 @@ import {
   mapToolStat,
 } from './insights/agent-activity'
 import {
+  buildErrorCount,
+  buildSlowest,
+  buildStatusFamilies,
+  buildTopFailingHosts,
+  mapErrorCount,
+  mapFailingHost,
+  mapSlowRequest,
+  mapStatusFamily,
+} from './insights/health'
+import {
   buildNavSeries,
   buildTopHosts,
   mapHostCount,
@@ -76,6 +86,34 @@ export function createApp(opts: AppOptions): Hono {
         navigations: navRows.map(mapNavBucket),
       }
       return c.json({ data, meta: buildMeta(p, hostRows.length, started) })
+    } catch {
+      return c.json({ error: 'store_unavailable' }, 503)
+    }
+  })
+
+  app.get('/v1/insights/health', async (c) => {
+    const started = Date.now()
+    const parsed = parseCommonParams(c.req.query())
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+    const p = parsed.value
+    try {
+      const sf = buildStatusFamilies(p)
+      const fh = buildTopFailingHosts(p)
+      const sl = buildSlowest(p)
+      const ec = buildErrorCount(p)
+      const [sfRows, fhRows, slRows, ecRows] = await Promise.all([
+        opts.reader.query<Record<string, unknown>>(sf.sql, sf.params),
+        opts.reader.query<Record<string, unknown>>(fh.sql, fh.params),
+        opts.reader.query<Record<string, unknown>>(sl.sql, sl.params),
+        opts.reader.query<Record<string, unknown>>(ec.sql, ec.params),
+      ])
+      const data = {
+        status_families: sfRows.map(mapStatusFamily),
+        top_failing_hosts: fhRows.map(mapFailingHost),
+        slowest: slRows.map(mapSlowRequest),
+        error_count: mapErrorCount(ecRows),
+      }
+      return c.json({ data, meta: buildMeta(p, sfRows.length, started) })
     } catch {
       return c.json({ error: 'store_unavailable' }, 503)
     }
