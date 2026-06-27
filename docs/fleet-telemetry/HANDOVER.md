@@ -1,6 +1,6 @@
 # Handover — BrowserOS fork: fleet telemetry (Track B)
 
-_Last updated: 2026-06-25 (Fase 3 MVP subsystem #1 done — central pipeline live, E2E green)_
+_Last updated: 2026-06-28 (Subsystem #2a done — read-only Query-API + dashboard live on the central store; pushed to origin/dev)_
 
 ## TL;DR — where we are
 
@@ -18,7 +18,12 @@ _Last updated: 2026-06-25 (Fase 3 MVP subsystem #1 done — central pipeline liv
   (`ReplacingMergeTree`, dedup by `event_id`), all in Docker (local now → AWS by
   swapping `.env`). At-least-once; the device contract is frozen at URL+token so
   OTel/Redpanda/managed slot in central-side later. **E2E green** (see §Fase 3 MVP).
-  **Next: subsystem #2** = the agent-query/visualization layer on top of ClickHouse.
+- **Subsystem #2 SCOPED, #2a DONE** — #2 (make the captured data usable) was
+  decomposed into **#2a** Query-API core + human dashboard (DONE), **#2b** agentic
+  access (NEXT), **#2c** autonomous process-mining. #2a = a new read-only
+  `fleet-central/query/` Bun+Hono service over ClickHouse `fleet.events` + a static
+  no-build dashboard, live on `:9401`. **E2E green** against the ~948-row sample (see
+  §Subsystem #2a). **Next: subsystem #2b** = expose the same Query-API as agent tools.
 - **Outstanding live-smoke** (unit/server-verified only): `agent.action` and the
   agent-side `app.event` forward end-to-end through a real LLM chat / built
   extension. Unwired families (optional, post-Fase-2): `network.websocket`,
@@ -257,19 +262,128 @@ other infra — leave them.
 regression test; integration test id → UUID; `controller.test.ts` is 513 lines
 (>400 warn) — split during subsystem-#2 work.
 
+## Subsystem #2 — make the captured data usable
+
+The north-star is twofold: **humans** see how the fleet is used, AND **future agents
+consume** the telemetry to discover business processes (usage, time, stakeholders,
+iterations). Too big for one spec → **decomposed into three sub-projects, each its own
+spec → plan → build**, all on the **reusable read-only Query-API contract** #2a defines:
+
+- **#2a — Query-API core + human UI** (DONE). Read-only service + dashboard.
+- **#2b — Agentic access** (NEXT). Expose the same Query-API as tools an agent calls
+  on demand to investigate ("analyze usage of X"). No new store; sits on #2a.
+- **#2c — Autonomous process-mining**. Agent(s) scan the telemetry, detect sequences
+  that look like business processes, estimate duration / stakeholders / iterations,
+  produce process "maps".
+
+### Subsystem #2a — Query-API + dashboard
+
+Spec `docs/fleet-telemetry/subsystem-2a-query-ui-design.md`; plan
+`subsystem-2a-implementation-plan.md`. Built subagent-driven (9 TDD tasks, per-task
+review + an opus whole-branch review). On `dev`, pushed to origin (head `5278acab`).
+
+**What it is:** a new **`fleet-central/query/`** Bun+Hono service — sibling to `ingest`,
+**strictly read-only** over ClickHouse `fleet.events` (never writes) — plus a static
+(no-build) dashboard. It's the durable contract #2b/#2c reuse; an agent can call the
+same JSON API a human's browser does (which is why we built our own, not Grafana).
+
+**Hard guarantees (verified in the final review):** read-only; every query uses
+`FROM fleet.events FINAL` (collapses at-least-once dupes); all user values bound as
+ClickHouse `query_params` (zero string interpolation → no injection); time filters
+bound as `Int64` epoch-ms via `fromUnixTimestamp64Milli`; `/v1/*` behind `Bearer
+QUERY_TOKEN`; no external CDN at runtime (uPlot vendored under `public/vendor/`); CH
+host port bound **127.0.0.1** only (loopback).
+
+**Endpoints** (`{data, meta}` shape; `400` bad params, `401` no token, `503` store down):
+
+| Route | Returns |
+|---|---|
+| `GET /health` | `{status, store}` |
+| `GET /v1/insights/usage` | top hosts (`?top=N`) + navigation time series (`?bucket=hour\|day`) |
+| `GET /v1/insights/agent-activity` | per-tool execs/error_rate/p50/p95 + MCP scope counts |
+| `GET /v1/insights/health` | status families (2xx…5xx/failed), top failing hosts, slowest, error count |
+| `GET /v1/events`, `/v1/events/:id` | raw event search (`?type&host&q&limit&offset`) + full detail |
+| `GET /v1/meta` | facets (types+counts, devices, channels, oses, time range) for the UI filters |
+| `GET /` | static dashboard (enter `QUERY_TOKEN` when prompted; stored in localStorage) |
+
+Common params: `from`/`to` (ISO or epoch-ms, default last 24h), `device_id`,
+`session_id`, `install_id`, `channel`, `os`, `limit` (≤1000), `offset`.
+
+**Files (`fleet-central/query/`):**
+
+| File | Role |
+|---|---|
+| `src/index.ts` | Startup: port 9401, requires `QUERY_TOKEN`, builds `ClickHouseReader`. |
+| `src/app.ts` | Hono: `/health`, `/v1/*` Bearer middleware, all routes, then static fallback (mounted LAST so API wins). |
+| `src/params.ts` | `parseCommonParams` — defaults/ISO+epoch/limit clamp; `→{ok,value}`. |
+| `src/sql.ts` | `commonFilter` — shared `AND …` WHERE fragment (time range + optional exact filters), bound params. |
+| `src/response.ts` | `buildMeta(params, rowCount, startedAt)`. |
+| `src/insights/{agent-activity,usage,health,search}.ts` | Pure builders `(params)→{sql,params}` + row mappers. `InsightQuery` defined in agent-activity, reused. |
+| `src/reader/{reader,clickhouse-reader,memory-reader}.ts` | `QueryReader` seam (mirrors ingest `StoreWriter`); `ClickHouseReader` (real, `query_params`+JSONEachRow, lazy client, `rawClient()` test hatch); `MemoryReader` (queued result sets) for Docker-free unit tests. |
+| `public/{index.html,app.css,app.js}` + `public/vendor/uPlot.*` | Vanilla-JS 4-tab dashboard (Usage/Agent/Health/Explore), token in localStorage, lazy per-tab fetch, explorer row → detail panel. Cells via `textContent` (XSS-safe over captured URLs). |
+| `Dockerfile`, `.dockerignore` | Mirror ingest; EXPOSE 9401. |
+| `src/**/*.test.ts` | 50 unit + 1 integration (skips without `CLICKHOUSE_URL`; proves `FINAL` dedup). |
+
+Deploy: `query` service added to the shared `fleet-central/docker-compose.yml`
+(depends on a healthy ClickHouse, reaches it by service name, publishes `9401`). New
+env `QUERY_TOKEN` (required) + `QUERY_PORT` in `.env.example`.
+
+**Run & verify:**
+```
+cd fleet-central                       # set QUERY_TOKEN in .env
+docker compose up -d --build           # brings up clickhouse + ingest + query
+curl -s localhost:9401/health          # {"status":"ok","store":"connected"}
+T=$(grep QUERY_TOKEN .env | cut -d= -f2)
+curl -s -H "authorization: Bearer $T" "localhost:9401/v1/meta" | head -c 300
+# open http://localhost:9401/ , enter QUERY_TOKEN
+# unit tests + integration:
+cd query && bun test                                   # 50 pass, integration skipped
+CLICKHOUSE_URL=http://localhost:8123 CLICKHOUSE_PASSWORD=<pw> bun test src/reader/clickhouse-reader.test.ts
+```
+
+**E2E result (2026-06-28, live):** full stack up; `/health` ok; `/v1/meta` returns
+real types from the sample (network.request 1561, navigation 45, page.lifecycle 6,
+agent.action 2); `/v1/insights/usage?top=3` returns 3 hosts + hour-bucketed nav
+series; `/v1/insights/agent-activity` returns per-tool stats; `401` without token.
+50 unit tests + tsc clean.
+
+**Bugs caught during review/live-smoke (all fixed):** (1) **ClickHouse `formatDateTime`
+uses `%i` for minutes, `%M`=month name** — buckets rendered `08:June:00`; fixed
+`%M`→`%i` in usage/search + regression guards (unit tests can't catch this — the
+format string only executes against real CH, so **always live-smoke time formatting**);
+(2) an over-broad search test forced dropping the host/url SELECT columns (kept the
+columns, tightened the test); (3) CH host port was `0.0.0.0` → loopback; (4) removed an
+unused `zod` dep, implemented the documented-but-ignored `top` param, clamped `offset`
+to UInt32, hardened table rendering against XSS.
+
+**Deferred (non-blocking, post-merge):** commit `bun.lock` + `--frozen-lockfile`
+(priority — reproducible Docker builds); `/health` returns 200 when degraded; `opt()`
+doesn't trim filter values; `lineChart` x-axis tick→label alignment fragile; README
+`## Query` heading is cosmetic. **Never got a live in-browser eyeball** (Chrome
+extension not connected) — curl-smoked the served assets + endpoints instead.
+
+**⚠️ Runtime state (2026-06-28):** the `fleet-central` stack is **LEFT UP** — `query`
+on `:9401` (rebuilt with all fixes), `ingest` on `:9400`, ClickHouse on
+`127.0.0.1:8123`, holding the ~948-row sample. Dashboard at `http://localhost:9401/`,
+token **`dev-query-token-456`** (dev value in `.env`). Down:
+`docker compose -f fleet-central/docker-compose.yml down` (`-v` wipes data).
+
 ## Next steps
 
-1. **Subsystem #2** — the agent-query / visualization layer on top of `fleet.events`
-   (the north-star: agents query usage to spend their time smarter). Its own spec →
-   plan cycle.
-2. **Growth path (central-side, device frozen)** — insert OTel + Redpanda in front of
+1. **Subsystem #2b** — agentic access: expose the #2a Query-API as tools an agent
+   calls to investigate on demand. Own spec → plan; builds on the #2a contract.
+   Then **#2c** — autonomous process-mining (the full north-star).
+2. **#2a hardening** (post-merge, non-blocking) — commit `bun.lock` +
+   `--frozen-lockfile` (priority); the smaller deferred items in §Subsystem #2a.
+3. **Growth path (central-side, device frozen)** — insert OTel + Redpanda in front of
    the ingest, or add a `StoreWriter` that produces to Redpanda; swap ClickHouse to
    managed via env. None of this touches the device.
-3. **Close the outstanding live-smoke** — `agent.action` + the agent-side `app.event`
-   forward end-to-end through a real LLM chat / built extension.
-4. **Optional remaining families** — `network.websocket`, `agent.chat`, `error`.
-5. **Fase 5** — fleet identity: fill `device_id`/`company_id`/`user_id` (null today),
-   per-device tokens / rotation (MVP uses one static bearer token).
+4. **Close the outstanding capture-side live-smoke** — `agent.action` + the agent-side
+   `app.event` forward end-to-end through a real LLM chat / built extension.
+5. **Optional remaining families** — `network.websocket`, `agent.chat`, `error`.
+6. **Fase 5** — fleet identity: fill `device_id`/`company_id`/`user_id` (null today),
+   per-device tokens / rotation (MVP uses one static bearer token). This is also what
+   makes #2a's `device_id`/`company_id` filters meaningful.
 
 ## Open decisions
 
@@ -279,6 +393,6 @@ regression test; integration test id → UUID; `controller.test.ts` is 513 lines
 
 ## Artifacts
 
-- Docs (in repo): `docs/fleet-telemetry/{adr-0001-network-capture,taxonomy-v0,fase-2-plan,fase-3-mvp-design,fase-3-implementation-plan,HANDOVER}.md`
+- Docs (in repo): `docs/fleet-telemetry/{adr-0001-network-capture,taxonomy-v0,fase-2-plan,fase-3-mvp-design,fase-3-implementation-plan,subsystem-2a-query-ui-design,subsystem-2a-implementation-plan,HANDOVER}.md`
 - Memory: `browseros-project`, `browseros-fork-strategy`, `browseros-dev-env-runbook`,
   `browseros-telemetry-build`, `browseros-remote-build-setup`.
