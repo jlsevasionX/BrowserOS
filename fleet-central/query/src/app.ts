@@ -1,4 +1,12 @@
 import { Hono } from 'hono'
+import {
+  buildMcpScopes,
+  buildToolStats,
+  mapMcpScope,
+  mapToolStat,
+} from './insights/agent-activity'
+import { parseCommonParams } from './params'
+import { buildMeta } from './response'
 import type { QueryReader } from './reader/reader'
 
 export interface AppOptions {
@@ -22,6 +30,25 @@ export function createApp(opts: AppOptions): Hono {
     const auth = c.req.header('authorization')
     if (auth !== `Bearer ${opts.token}`) return c.body(null, 401)
     await next()
+  })
+
+  app.get('/v1/insights/agent-activity', async (c) => {
+    const started = Date.now()
+    const parsed = parseCommonParams(c.req.query())
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+    const p = parsed.value
+    try {
+      const tq = buildToolStats(p)
+      const mq = buildMcpScopes(p)
+      const [toolRows, mcpRows] = await Promise.all([
+        opts.reader.query<Record<string, unknown>>(tq.sql, tq.params),
+        opts.reader.query<Record<string, unknown>>(mq.sql, mq.params),
+      ])
+      const data = { tools: toolRows.map(mapToolStat), mcp_scopes: mcpRows.map(mapMcpScope) }
+      return c.json({ data, meta: buildMeta(p, toolRows.length, started) })
+    } catch {
+      return c.json({ error: 'store_unavailable' }, 503)
+    }
   })
 
   return app
