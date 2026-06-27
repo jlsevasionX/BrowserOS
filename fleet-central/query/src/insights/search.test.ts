@@ -25,6 +25,8 @@ describe('search builders', () => {
     expect(q.params.type).toBe('navigation')
     expect(q.params.host).toBe('a.com')
     expect(q.params.q).toBe('%login%')
+    expect(q.sql).toContain('%H:%i:%S')
+    expect(q.sql).not.toContain('%M')
   })
 
   test('event search omits absent optional filters', () => {

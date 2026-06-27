@@ -28,11 +28,15 @@ describe('usage builders', () => {
     const q = buildNavSeries(params(), 'hour')
     expect(q.sql).toContain('toStartOfHour(ts)')
     expect(q.sql).toContain("type = 'navigation'")
+    expect(q.sql).toContain('%H:%i:%S')
+    expect(q.sql).not.toContain('%M')
   })
 
   test('nav series buckets by day', () => {
     const q = buildNavSeries(params(), 'day')
     expect(q.sql).toContain('toStartOfDay(ts)')
+    expect(q.sql).toContain('%H:%i:%S')
+    expect(q.sql).not.toContain('%M')
   })
 
   test('parseBucket defaults to hour, accepts day', () => {

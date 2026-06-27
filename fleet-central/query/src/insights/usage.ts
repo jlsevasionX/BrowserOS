@@ -42,7 +42,7 @@ export function buildNavSeries(p: QueryParams, bucket: 'hour' | 'day'): InsightQ
   const f = commonFilter(p)
   const fn = bucket === 'day' ? 'toStartOfDay' : 'toStartOfHour'
   const sql = `
-    SELECT formatDateTime(${fn}(ts), '%Y-%m-%d %H:%M:%S') AS bucket,
+    SELECT formatDateTime(${fn}(ts), '%Y-%m-%d %H:%i:%S') AS bucket,
            count() AS navigations
     FROM fleet.events FINAL
     WHERE type = 'navigation'

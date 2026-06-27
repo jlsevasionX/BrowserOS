@@ -49,7 +49,7 @@ export function buildEventSearch(
   }
   const sql = `
     SELECT event_id,
-           formatDateTime(ts, '%Y-%m-%d %H:%M:%S.%f') AS ts,
+           formatDateTime(ts, '%Y-%m-%d %H:%i:%S.%f') AS ts,
            type, device_id, session_id,
            JSONExtractString(payload, 'host') AS host,
            JSONExtractString(payload, 'url') AS url,
