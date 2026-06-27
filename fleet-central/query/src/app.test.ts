@@ -120,3 +120,52 @@ describe('GET /v1/insights/health', () => {
     expect(res.status).toBe(503)
   })
 })
+
+describe('raw search + meta', () => {
+  const auth = { authorization: `Bearer ${TOKEN}` }
+
+  test('GET /v1/events maps rows', async () => {
+    const reader = new MemoryReader([
+      {
+        event_id: 'e1', ts: '2023-11-14 22:00:00.000', type: 'navigation',
+        device_id: null, session_id: 's', host: 'a.com', url: 'http://a', payload: '{}',
+      },
+    ])
+    const app = createApp({ reader, token: TOKEN })
+    const res = await app.request('http://x/v1/events?type=navigation', { headers: auth })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as any
+    expect(body.data[0].event_id).toBe('e1')
+    expect(body.data[0].payload).toEqual({})
+  })
+
+  test('GET /v1/events/:id returns 404 when empty', async () => {
+    const app = createApp({ reader: new MemoryReader([]), token: TOKEN })
+    const res = await app.request('http://x/v1/events/nope', { headers: auth })
+    expect(res.status).toBe(404)
+  })
+
+  test('GET /v1/events/:id returns the full event with parsed payload', async () => {
+    const reader = new MemoryReader([{ event_id: 'e1', type: 'navigation', payload: '{"host":"a.com"}' }])
+    const app = createApp({ reader, token: TOKEN })
+    const res = await app.request('http://x/v1/events/e1', { headers: auth })
+    const body = (await res.json()) as any
+    expect(body.data.payload).toEqual({ host: 'a.com' })
+  })
+
+  test('GET /v1/meta aggregates facets', async () => {
+    const reader = new MemoryReader(
+      [{ type: 'navigation', count: '3' }],
+      [{ device_id: 'd1' }],
+      [{ channel: 'dev' }],
+      [{ os: 'macos' }],
+      [{ min_ts: '1000', max_ts: '2000' }],
+    )
+    const app = createApp({ reader, token: TOKEN })
+    const res = await app.request('http://x/v1/meta', { headers: auth })
+    const body = (await res.json()) as any
+    expect(body.data.types[0]).toEqual({ type: 'navigation', count: 3 })
+    expect(body.data.devices).toEqual(['d1'])
+    expect(body.data.range).toEqual({ from: 1000, to: 2000 })
+  })
+})

@@ -22,6 +22,13 @@ import {
   mapNavBucket,
   parseBucket,
 } from './insights/usage'
+import {
+  buildEventById,
+  buildEventSearch,
+  buildMetaFacets,
+  mapEventRow,
+  mapFullEvent,
+} from './insights/search'
 import { parseCommonParams } from './params'
 import { buildMeta } from './response'
 import type { QueryReader } from './reader/reader'
@@ -114,6 +121,61 @@ export function createApp(opts: AppOptions): Hono {
         error_count: mapErrorCount(ecRows),
       }
       return c.json({ data, meta: buildMeta(p, sfRows.length, started) })
+    } catch {
+      return c.json({ error: 'store_unavailable' }, 503)
+    }
+  })
+
+  app.get('/v1/events', async (c) => {
+    const started = Date.now()
+    const parsed = parseCommonParams(c.req.query())
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+    const p = parsed.value
+    try {
+      const q = buildEventSearch(p, {
+        type: c.req.query('type'),
+        host: c.req.query('host'),
+        q: c.req.query('q'),
+      })
+      const rows = await opts.reader.query<Record<string, unknown>>(q.sql, q.params)
+      return c.json({ data: rows.map(mapEventRow), meta: buildMeta(p, rows.length, started) })
+    } catch {
+      return c.json({ error: 'store_unavailable' }, 503)
+    }
+  })
+
+  app.get('/v1/events/:event_id', async (c) => {
+    try {
+      const q = buildEventById(c.req.param('event_id'))
+      const rows = await opts.reader.query<Record<string, unknown>>(q.sql, q.params)
+      if (rows.length === 0) return c.json({ error: 'not_found' }, 404)
+      return c.json({ data: mapFullEvent(rows[0]) })
+    } catch {
+      return c.json({ error: 'store_unavailable' }, 503)
+    }
+  })
+
+  app.get('/v1/meta', async (c) => {
+    try {
+      const f = buildMetaFacets()
+      const [types, devices, channels, oses, range] = await Promise.all([
+        opts.reader.query<Record<string, unknown>>(f.types.sql, f.types.params),
+        opts.reader.query<Record<string, unknown>>(f.devices.sql, f.devices.params),
+        opts.reader.query<Record<string, unknown>>(f.channels.sql, f.channels.params),
+        opts.reader.query<Record<string, unknown>>(f.oses.sql, f.oses.params),
+        opts.reader.query<Record<string, unknown>>(f.range.sql, f.range.params),
+      ])
+      return c.json({
+        data: {
+          types: types.map((r) => ({ type: String(r.type), count: Number(r.count) })),
+          devices: devices.map((r) => String(r.device_id)),
+          channels: channels.map((r) => String(r.channel)),
+          oses: oses.map((r) => String(r.os)),
+          range: range.length
+            ? { from: Number(range[0].min_ts), to: Number(range[0].max_ts) }
+            : { from: null, to: null },
+        },
+      })
     } catch {
       return c.json({ error: 'store_unavailable' }, 503)
     }
