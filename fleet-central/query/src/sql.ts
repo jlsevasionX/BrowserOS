@@ -14,7 +14,7 @@ export function commonFilter(p: QueryParams): {
   ]
   const params: Record<string, unknown> = { from: p.from, to: p.to }
 
-  const exact: Array<[keyof QueryParams, string]> = [
+  const exact: Array<['device_id' | 'session_id' | 'install_id' | 'channel' | 'os', string]> = [
     ['device_id', 'device_id'],
     ['session_id', 'session_id'],
     ['install_id', 'install_id'],
