@@ -51,6 +51,8 @@ export function buildEventSearch(
     SELECT event_id,
            formatDateTime(ts, '%Y-%m-%d %H:%M:%S.%f') AS ts,
            type, device_id, session_id,
+           JSONExtractString(payload, 'host') AS host,
+           JSONExtractString(payload, 'url') AS url,
            payload
     FROM fleet.events FINAL
     WHERE 1 = 1
