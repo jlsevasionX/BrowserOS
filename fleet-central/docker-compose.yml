@@ -33,5 +33,21 @@ services:
     ports:
       - "${INGEST_PORT:-9400}:9400"
 
+  query:
+    build: ./query
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      QUERY_PORT: 9401
+      QUERY_TOKEN: ${QUERY_TOKEN:?set QUERY_TOKEN in .env}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-fleet}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    ports:
+      - "${QUERY_PORT:-9401}:9401"
+
 volumes:
   clickhouse-data:
