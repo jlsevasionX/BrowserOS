@@ -169,3 +169,13 @@ describe('raw search + meta', () => {
     expect(body.data.range).toEqual({ from: 1000, to: 2000 })
   })
 })
+
+describe('static UI', () => {
+  test('serves index.html at /', async () => {
+    const app = createApp({ reader: new MemoryReader(), token: TOKEN })
+    const res = await app.request('http://x/')
+    expect(res.status).toBe(200)
+    const html = await res.text()
+    expect(html).toContain('Fleet Telemetry')
+  })
+})

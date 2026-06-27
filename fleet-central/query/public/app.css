@@ -1,0 +1,20 @@
+:root { color-scheme: dark; --bg: #14161a; --fg: #e6e6e6; --mut: #8a93a0; --line: #2a2f37; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 8px; }
+h1 { font-size: 16px; margin: 0; }
+#filters { display: flex; gap: 8px; }
+select, button { background: #1d2128; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+button { cursor: pointer; }
+nav#tabs { display: flex; gap: 4px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+nav#tabs button.active { background: #2a3340; }
+main { padding: 16px; }
+.tab { display: none; }
+.tab.active { display: block; }
+table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { color: var(--mut); font-weight: 600; }
+tr.clickable:hover { background: #1d2128; cursor: pointer; }
+#status { position: fixed; bottom: 8px; right: 12px; color: var(--mut); }
+pre { background: #0e1014; padding: 12px; border-radius: 8px; overflow: auto; max-height: 60vh; }
+.uplot { margin-top: 8px; }

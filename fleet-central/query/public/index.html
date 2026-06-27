@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fleet Telemetry</title>
+    <link rel="stylesheet" href="/vendor/uPlot.min.css" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Fleet Telemetry</h1>
+      <div id="filters">
+        <select id="range">
+          <option value="86400000">Last 24h</option>
+          <option value="604800000">Last 7d</option>
+          <option value="2592000000">Last 30d</option>
+        </select>
+        <select id="device"><option value="">All devices</option></select>
+        <select id="channel"><option value="">All channels</option></select>
+        <select id="os"><option value="">All OS</option></select>
+        <button id="reload">Reload</button>
+      </div>
+    </header>
+    <nav id="tabs">
+      <button data-tab="usage" class="active">Usage</button>
+      <button data-tab="agent">Agent</button>
+      <button data-tab="health">Health</button>
+      <button data-tab="explore">Explore</button>
+    </nav>
+    <main>
+      <section id="usage" class="tab active"></section>
+      <section id="agent" class="tab"></section>
+      <section id="health" class="tab"></section>
+      <section id="explore" class="tab"></section>
+    </main>
+    <div id="status"></div>
+    <script src="/vendor/uPlot.iife.min.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

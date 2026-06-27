@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { serveStatic } from 'hono/bun'
 import {
   buildMcpScopes,
   buildToolStats,
@@ -180,6 +181,9 @@ export function createApp(opts: AppOptions): Hono {
       return c.json({ error: 'store_unavailable' }, 503)
     }
   })
+
+  app.use('/*', serveStatic({ root: './public' }))
+  app.get('/', serveStatic({ path: './public/index.html' }))
 
   return app
 }
