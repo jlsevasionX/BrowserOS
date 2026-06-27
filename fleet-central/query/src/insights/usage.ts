@@ -16,8 +16,16 @@ export function parseBucket(v: string | undefined): 'hour' | 'day' {
   return v === 'day' ? 'day' : 'hour'
 }
 
-export function buildTopHosts(p: QueryParams): InsightQuery {
+export function parseTop(v: string | undefined): number {
+  if (v === undefined || v.trim() === '') return 20
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 20
+  return Math.max(1, Math.min(1000, Math.trunc(n)))
+}
+
+export function buildTopHosts(p: QueryParams, top?: number): InsightQuery {
   const f = commonFilter(p)
+  const limit = top ?? p.limit
   const sql = `
     SELECT JSONExtractString(payload, 'host') AS host,
            count() AS requests
@@ -26,8 +34,8 @@ export function buildTopHosts(p: QueryParams): InsightQuery {
       ${f.sql}
     GROUP BY host
     ORDER BY requests DESC
-    LIMIT {limit:UInt32}`
-  return { sql, params: { ...f.params, limit: p.limit } }
+    LIMIT {top:UInt32}`
+  return { sql, params: { ...f.params, top: limit } }
 }
 
 export function buildNavSeries(p: QueryParams, bucket: 'hour' | 'day'): InsightQuery {

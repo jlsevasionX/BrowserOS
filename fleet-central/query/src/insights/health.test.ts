@@ -20,6 +20,7 @@ function params() {
 describe('health builders', () => {
   test('status families bucket the HTTP status', () => {
     const q = buildStatusFamilies(params())
+    expect(q.sql).toContain('FROM fleet.events FINAL')
     expect(q.sql).toContain("type = 'network.request'")
     expect(q.sql).toContain("JSONExtractInt(payload, 'status')")
     expect(q.sql).toContain('multiIf(')

@@ -46,4 +46,10 @@ describe('parseCommonParams', () => {
     const r = parseCommonParams({ from: '2000', to: '1000' })
     expect(r.ok).toBe(false)
   })
+
+  test('clamps offset to UInt32 max (4294967295)', () => {
+    const r = parseCommonParams({ offset: '99999999999' })
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.offset).toBe(4294967295)
+  })
 })

@@ -6,6 +6,7 @@ import {
   mapHostCount,
   mapNavBucket,
   parseBucket,
+  parseTop,
 } from './usage'
 
 function params() {
@@ -38,6 +39,29 @@ describe('usage builders', () => {
     expect(parseBucket(undefined)).toBe('hour')
     expect(parseBucket('day')).toBe('day')
     expect(parseBucket('garbage')).toBe('hour')
+  })
+
+  test('buildTopHosts with explicit top binds params.top and uses {top:UInt32}', () => {
+    const q = buildTopHosts(params(), 5)
+    expect(q.sql).toContain('LIMIT {top:UInt32}')
+    expect(q.params.top).toBe(5)
+  })
+
+  test('buildTopHosts without explicit top falls back to p.limit', () => {
+    const p = params()
+    const q = buildTopHosts(p)
+    expect(q.sql).toContain('LIMIT {top:UInt32}')
+    expect(q.params.top).toBe(p.limit)
+  })
+
+  test('parseTop defaults to 20, parses positive ints, clamps to 1000, ignores garbage', () => {
+    expect(parseTop(undefined)).toBe(20)
+    expect(parseTop('')).toBe(20)
+    expect(parseTop('5')).toBe(5)
+    expect(parseTop('garbage')).toBe(20)
+    expect(parseTop('99999')).toBe(1000)
+    expect(parseTop('0')).toBe(1)
+    expect(parseTop('-5')).toBe(1)
   })
 
   test('mappers coerce counts', () => {

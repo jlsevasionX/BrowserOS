@@ -57,7 +57,7 @@ export function parseCommonParams(
       channel: opt('channel'),
       os: opt('os'),
       limit: clampInt(q.limit, 100, 1, MAX_LIMIT),
-      offset: clampInt(q.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+      offset: clampInt(q.offset, 0, 0, 4294967295),
     },
   }
 }

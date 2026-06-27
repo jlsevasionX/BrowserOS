@@ -22,6 +22,7 @@ import {
   mapHostCount,
   mapNavBucket,
   parseBucket,
+  parseTop,
 } from './insights/usage'
 import {
   buildEventById,
@@ -82,8 +83,9 @@ export function createApp(opts: AppOptions): Hono {
     if (!parsed.ok) return c.json({ error: parsed.error }, 400)
     const p = parsed.value
     const bucket = parseBucket(c.req.query('bucket'))
+    const top = parseTop(c.req.query('top'))
     try {
-      const hq = buildTopHosts(p)
+      const hq = buildTopHosts(p, top)
       const nq = buildNavSeries(p, bucket)
       const [hostRows, navRows] = await Promise.all([
         opts.reader.query<Record<string, unknown>>(hq.sql, hq.params),
