@@ -368,11 +368,88 @@ on `:9401` (rebuilt with all fixes), `ingest` on `:9400`, ClickHouse on
 token **`dev-query-token-456`** (dev value in `.env`). Down:
 `docker compose -f fleet-central/docker-compose.yml down` (`-v` wipes data).
 
+### Subsystem #2b — MCP tool layer (agentic access)
+
+Spec `docs/fleet-telemetry/subsystem-2b-mcp-design.md`; plan
+`subsystem-2b-implementation-plan.md`. Built subagent-driven (5 TDD tasks, per-task
+review + an opus whole-branch review = READY TO MERGE, no Critical/Important). On `dev`,
+commits `f6892bff..9de7005c`.
+
+**What it is:** a new **`fleet-central/mcp/`** Bun+Hono service — sibling to `ingest`/
+`query` — that exposes the #2a Query-API as **6 MCP tools** any agent can call. It is a
+**pure, stateless HTTP adapter**: MCP tool call → HTTP GET against the Query-API
+(Bearer `QUERY_TOKEN`) → the `{data, meta}` JSON returned verbatim as the tool result.
+**No store, no LLM, no writes, no ClickHouse access** — it depends only on the public
+#2a contract (so `query/` can evolve without touching #2b). StreamableHTTP transport,
+bearer-gated with `MCP_TOKEN`, on **:9402**.
+
+**Tools (1:1 with #2a endpoints, `fleet_` prefix):** `fleet_meta`, `fleet_usage`,
+`fleet_agent_activity`, `fleet_health`, `fleet_search_events`, `fleet_get_event`. Common
+params (from/to/device_id/session_id/install_id/channel/os/limit/offset) on every tool
+except `fleet_get_event`. Each tool has a rich description so an autonomous agent (#2c)
+can pick correctly; `fleet_meta` is "start here to discover what to query".
+
+**Hard guarantees (verified in the final review):** bearer gate registered before the
+`/mcp` route (exact-match, covers POST, no bypass); `QUERY_TOKEN` never leaks into tool
+results or error messages (explicit regression test); pure-adapter invariant holds (no
+`@clickhouse/client` dep, no SQL); per-request server+transport (MCP SDK requirement);
+compose service is additive (clickhouse/ingest/query/volumes untouched); `mcp/bun.lock`
+tracked via `!mcp/bun.lock` gitignore exception → `--frozen-lockfile` resolves; no real
+`.env` committed.
+
+**Files (`fleet-central/mcp/`):**
+
+| File | Role |
+|---|---|
+| `src/index.ts` | Startup: port 9402, requires `MCP_TOKEN` + `QUERY_TOKEN`, builds `HttpQueryClient` (default `QUERY_BASE_URL=http://query:9401`). |
+| `src/query-client.ts` | The seam: `QueryClient` interface → `HttpQueryClient` (fetch + Bearer + `AbortSignal.timeout`, non-2xx → typed `QueryClientError`) / `FakeQueryClient` (tests). Mirrors #2a's `QueryReader`. |
+| `src/params.ts` | `buildQuery(args)` — serializes defined args to a querystring. |
+| `src/tools.ts` | `TOOLS: ToolDef[]` — the 6 tools (zod `inputSchema` + handler delegating to a `QueryClient` method). Single source of truth. |
+| `src/server.ts` | `createMcpServer(client)` — registers all `TOOLS` on an SDK `McpServer`; success → `{content:[text]}`, throw → `{content:[text], isError:true}`. |
+| `src/app.ts` | Hono: unauth `GET /health` (probes `client.ping()`), Bearer middleware on `/mcp`, per-request `StreamableHTTPTransport` mount. |
+| `Dockerfile`, `.dockerignore` | Mirror `query/`; `bun install --frozen-lockfile`; EXPOSE 9402. |
+| `src/**/*.test.ts` | 17 unit tests incl. a real in-memory MCP handshake (SDK `Client` + `InMemoryTransport`). |
+
+Deploy: `mcp` service added to the shared `fleet-central/docker-compose.yml`
+(depends_on `query` started, reaches it by service name, publishes `9402`). New env
+`MCP_TOKEN` (required) + `MCP_PORT` in `.env.example`.
+
+**Run & verify:**
+```
+cd fleet-central                       # set MCP_TOKEN in .env (e.g. dev-mcp-token-789)
+docker compose up -d --build           # brings up clickhouse + ingest + query + mcp
+curl -s localhost:9402/health          # {"status":"ok","query":"connected"}
+T=$(grep '^MCP_TOKEN=' .env | cut -d= -f2)
+# NOTE: StreamableHTTP needs this Accept header on POST:
+curl -s -X POST localhost:9402/mcp \
+  -H "authorization: Bearer $T" -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'      # lists the 6 fleet_ tools
+cd mcp && bun test                                          # 17 pass, tsc clean
+```
+
+**E2E result (2026-06-28, live):** full stack up incl. `mcp:9402`; `/health` ok; bare
+`POST /mcp` → `401`; authed `tools/list` → all 6 `fleet_` tools; `fleet_meta` `tools/call`
+returned live data from the ~948-row sample (network.request 1561, navigation 45,
+page.lifecycle 6, agent.action 2). 17 unit tests + tsc clean.
+
+**Deferred (non-blocking, post-merge):** non-constant-time bearer compare (consistent
+with `query`); `mcp` `depends_on` uses `service_started` (query defines no healthcheck —
+only valid option); no compose `healthcheck` wired on the `mcp` service; degraded/down
+`/health` path untested. **Claude-Code GUI E2E** (add the server as an HTTP MCP server at
+`http://localhost:9402/mcp` with `Authorization: Bearer <MCP_TOKEN>`, ask a real fleet
+question) was NOT run — the curl `tools/call` is the accepted fallback acceptance.
+
+**⚠️ Runtime state (2026-06-28):** `mcp` is **LEFT UP** in the stack on `:9402`, token
+**`dev-mcp-token-789`** (dev value in `.env`).
+
 ## Next steps
 
-1. **Subsystem #2b** — agentic access: expose the #2a Query-API as tools an agent
-   calls to investigate on demand. Own spec → plan; builds on the #2a contract.
-   Then **#2c** — autonomous process-mining (the full north-star).
+1. **Subsystem #2b** — agentic access: **DONE** (see §Subsystem #2b above), `fleet-central/mcp`
+   on `:9402`, 6 MCP tools over the #2a contract. **Next: #2c** — autonomous
+   process-mining (the full north-star): agents scan the telemetry via these tools (or a
+   superset) to detect business-process sequences and estimate duration/stakeholders/
+   iterations. Own spec → plan; builds on #2a's Query-API + #2b's tool layer.
 2. **#2a hardening** (post-merge, non-blocking) — commit `bun.lock` +
    `--frozen-lockfile` (priority); the smaller deferred items in §Subsystem #2a.
 3. **Growth path (central-side, device frozen)** — insert OTel + Redpanda in front of
