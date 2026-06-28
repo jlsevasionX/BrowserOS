@@ -49,5 +49,19 @@ services:
     ports:
       - "${QUERY_PORT:-9401}:9401"
 
+  mcp:
+    build: ./mcp
+    restart: unless-stopped
+    depends_on:
+      query:
+        condition: service_started
+    environment:
+      MCP_PORT: 9402
+      MCP_TOKEN: ${MCP_TOKEN:?set MCP_TOKEN in .env}
+      QUERY_BASE_URL: http://query:9401
+      QUERY_TOKEN: ${QUERY_TOKEN:?set QUERY_TOKEN in .env}
+    ports:
+      - "${MCP_PORT:-9402}:9402"
+
 volumes:
   clickhouse-data:
